@@ -211,8 +211,9 @@ static void setWifiSTA() {
       LOG_INF("Wifi Station set static IP");
     } 
   } else LOG_INF("Wifi Station IP from DHCP");
-  WiFi.STA.enableIPv6(USE_IP6); 
+  WiFi.STA.enableIPv6(USE_IP6);
   WiFi.STA.begin();
+  WiFi.setSleep(false); // disable modem sleep to stabilize ping/DNS latency
   WiFi.STA.connect(ST_SSID, ST_Pass);
   debugMemory("setWifiSTA");
 }
