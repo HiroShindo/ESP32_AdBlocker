@@ -45,6 +45,7 @@ void handleDNSpacket(AsyncUDPPacket packet) {
   char domain[MAX_HOSTNAME];
   int new_offset = parseDNSname(rx, offset, domain);
   if (new_offset < 0) return;
+  uint16_t qtype = (rx[new_offset] << 8) | rx[new_offset + 1];
   offset = new_offset;
   offset += 4; // skip QTYPE + QCLASS
 
@@ -52,39 +53,53 @@ void handleDNSpacket(AsyncUDPPacket packet) {
   uint8_t tx[512];
   memcpy(tx, rx, len);
   dns_header_t *res = (dns_header_t *)tx;
-
-  res->flags = htons(0x8180); // response + no error
-  res->ancount = htons(1);
+  res->nscount = 0;
+  res->arcount = 0; // any OPT/additional records in the query are not echoed back
   int resp_offset = offset;
 
-  // Answer: pointer to name (compression)
-  tx[resp_offset++] = 0xC0;
-  tx[resp_offset++] = 0x0C;
+  // only fabricate an answer for A queries - checkBlocklist only ever returns an IPv4
+  // address, so answering non-A queries (eg AAAA) with a mistyped Type A record produces
+  // a response that doesn't match the question, which strict resolvers (Windows dnscache)
+  // reject outright instead of falling back to the A record
+  if (qtype == 0x0001) {
+    res->flags = htons(0x8180); // response + no error
+    res->ancount = htons(1);
 
-  // Type A
-  tx[resp_offset++] = 0x00;
-  tx[resp_offset++] = 0x01;
+    // Answer: pointer to name (compression)
+    tx[resp_offset++] = 0xC0;
+    tx[resp_offset++] = 0x0C;
 
-  // Class IN
-  tx[resp_offset++] = 0x00;
-  tx[resp_offset++] = 0x01;
+    // Type A
+    tx[resp_offset++] = 0x00;
+    tx[resp_offset++] = 0x01;
 
-  // TTL
-  tx[resp_offset++] = 0x00;
-  tx[resp_offset++] = 0x00;
-  tx[resp_offset++] = 0x00;
-  tx[resp_offset++] = 0x3C;
+    // Class IN
+    tx[resp_offset++] = 0x00;
+    tx[resp_offset++] = 0x01;
 
-  // Data length
-  tx[resp_offset++] = 0x00;
-  tx[resp_offset++] = 0x04;
+    // TTL
+    tx[resp_offset++] = 0x00;
+    tx[resp_offset++] = 0x00;
+    tx[resp_offset++] = 0x00;
+    tx[resp_offset++] = 0x3C;
 
-  // return IP to use
-  IPAddress gotIP = checkBlocklist(domain);
-  tx[resp_offset++] = gotIP[0];
-  tx[resp_offset++] = gotIP[1];
-  tx[resp_offset++] = gotIP[2];
-  tx[resp_offset++] = gotIP[3];
+    // Data length
+    tx[resp_offset++] = 0x00;
+    tx[resp_offset++] = 0x04;
+
+    // return IP to use
+    IPAddress gotIP = checkBlocklist(domain);
+    tx[resp_offset++] = gotIP[0];
+    tx[resp_offset++] = gotIP[1];
+    tx[resp_offset++] = gotIP[2];
+    tx[resp_offset++] = gotIP[3];
+  } else {
+    // non-A query: still run blocklist check for logging/stats, but reply NOERROR/NODATA
+    // so the resolver cleanly falls back to its A query instead of getting a malformed answer
+    checkBlocklist(domain);
+    res->flags = htons(0x8180);
+    res->ancount = 0;
+  }
 
   // Send response
   packet.write(tx, resp_offset);
