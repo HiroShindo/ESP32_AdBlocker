@@ -223,6 +223,11 @@ static void setWifiSTA() {
   // channel 0 = let it locate ST_bssid on whatever channel it's currently using,
   // rather than hardcoding channel 6 which would break if the router's auto-channel changes
   WiFi.STA.connect(ST_SSID, ST_Pass, 0, ST_bssid);
+  // logged every boot so a rebuild from a stale/wrong branch is obvious immediately from the
+  // log, instead of only surfacing weeks later as unexplained latency/instability - see git log
+  // for utils.cpp / TROUBLESHOOTING.md if either of these is ever unexpectedly missing
+  LOG_INF("Local patches active: BSSID pin=%02X:%02X:%02X:%02X:%02X:%02X, WiFi.setSleep=false",
+    ST_bssid[0], ST_bssid[1], ST_bssid[2], ST_bssid[3], ST_bssid[4], ST_bssid[5]);
   debugMemory("setWifiSTA");
 }
 
