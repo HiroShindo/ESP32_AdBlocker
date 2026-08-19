@@ -38,6 +38,11 @@ char hostName[MAX_HOST_LEN] = ""; // Default Host name
 char ST_SSID[MAX_HOST_LEN]  = ""; //Default router ssid
 char ST_Pass[MAX_PWD_LEN] = ""; //Default router passd
 
+// pin STA connection to the living room eo router's BSSID so it cannot roam to the
+// aterm-d68960-g bedroom Aterm relay (same SSID, weaker signal), which was causing
+// periodic gateway ping timeouts / wifi restarts
+static const uint8_t ST_bssid[6] = {0xa4, 0xde, 0x26, 0x37, 0x84, 0xdf};
+
 // leave following blank for dhcp
 char ST_ip[MAX_IP_LEN]  = ""; // Static IP
 char ST_sn[MAX_IP_LEN]  = ""; // subnet normally 255.255.255.0
@@ -212,9 +217,12 @@ static void setWifiSTA() {
       LOG_INF("Wifi Station set static IP");
     } 
   } else LOG_INF("Wifi Station IP from DHCP");
-  WiFi.STA.enableIPv6(USE_IP6); 
+  WiFi.STA.enableIPv6(USE_IP6);
   WiFi.STA.begin();
-  WiFi.STA.connect(ST_SSID, ST_Pass);
+  WiFi.setSleep(false); // avoid modem-sleep latency/jitter on gateway pings
+  // channel 0 = let it locate ST_bssid on whatever channel it's currently using,
+  // rather than hardcoding channel 6 which would break if the router's auto-channel changes
+  WiFi.STA.connect(ST_SSID, ST_Pass, 0, ST_bssid);
   debugMemory("setWifiSTA");
 }
 
@@ -336,11 +344,11 @@ static bool startWifi(bool firstcall = true) {
         delay(500);
       }
     }
-    // show stats of requested SSID
+    // show stats of requested SSID, one line per AP broadcasting it (eg repeater / mesh node)
     int numNetworks = WiFi.scanNetworks();
     for (int i=0; i < numNetworks; i++) {
       if (WiFi.SSID(i) == ST_SSID)
-        LOG_INF("Wifi stats for %s - signal strength: %ld dBm; Encryption: %s; channel: %ld",  ST_SSID, WiFi.RSSI(i), getEncType(i), WiFi.channel(i));
+        LOG_INF("Wifi stats for %s - BSSID: %s; signal strength: %ld dBm; Encryption: %s; channel: %ld",  ST_SSID, WiFi.BSSIDstr(i).c_str(), WiFi.RSSI(i), getEncType(i), WiFi.channel(i));
     }
     if (wlStat != WL_CONNECTED) LOG_WRN("SSID %s not connected %s", ST_SSID, wifiStatusStr(wlStat));
   }
