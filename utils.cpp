@@ -75,6 +75,11 @@ uint32_t wifiTimeoutSecs = 30; // how often to check wifi status
 static bool APstarted = false;
 esp_ping_handle_t pingHandle = NULL;
 bool usePing = true;
+// require this many consecutive gateway ping timeouts before tearing down and rebuilding
+// the network connection, so a single transient miss (eg airtime contention from a client
+// device's own cold boot: DHCP/ARP/mDNS burst) doesn't itself trigger a restart cycle
+#define PING_FAIL_THRESHOLD 2
+static uint8_t consecutivePingFails = 0;
 
 static void startPing();
 static bool getLocalNTP();
@@ -468,6 +473,7 @@ static void pingSuccess(esp_ping_handle_t hdl, void *args) {
     }
   }
   resetWatchDog(0, wifiTimeoutSecs * 1000 * 2);
+  consecutivePingFails = 0;
   if (dataFilesChecked) resetCrashLoop();
   statusCheck();
 }
@@ -479,6 +485,11 @@ static void pingTimeout(esp_ping_handle_t hdl, void *args) {
   resetWatchDog(0, wifiTimeoutSecs * 1000 * 2);
   if (netMode > 0) {
     if (usePing) {
+      if (++consecutivePingFails < PING_FAIL_THRESHOLD) {
+        LOG_WRN("Failed to ping gateway (%u/%u), tolerating transient miss", consecutivePingFails, PING_FAIL_THRESHOLD);
+        return;
+      }
+      consecutivePingFails = 0;
       LOG_WRN("Failed to ping gateway, restart ethernet ...");
       startNetwork(false);
     } else {
@@ -493,6 +504,11 @@ static void pingTimeout(esp_ping_handle_t hdl, void *args) {
       wl_status_t wStat = WiFi.STA.status();
       if (wStat != WL_NO_SSID_AVAIL && wStat != WL_NO_SHIELD) {
         if (usePing) {
+          if (++consecutivePingFails < PING_FAIL_THRESHOLD) {
+            LOG_WRN("Failed to ping gateway (%u/%u), tolerating transient miss", consecutivePingFails, PING_FAIL_THRESHOLD);
+            return;
+          }
+          consecutivePingFails = 0;
           LOG_WRN("Failed to ping gateway, restart wifi ...");
           startWifi(false);
         } else {
