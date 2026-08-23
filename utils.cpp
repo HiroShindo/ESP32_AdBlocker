@@ -350,10 +350,15 @@ static bool startWifi(bool firstcall = true) {
       }
     }
     // show stats of requested SSID, one line per AP broadcasting it (eg repeater / mesh node)
-    int numNetworks = WiFi.scanNetworks();
-    for (int i=0; i < numNetworks; i++) {
-      if (WiFi.SSID(i) == ST_SSID)
-        LOG_INF("Wifi stats for %s - BSSID: %s; signal strength: %ld dBm; Encryption: %s; channel: %ld",  ST_SSID, WiFi.BSSIDstr(i).c_str(), WiFi.RSSI(i), getEncType(i), WiFi.channel(i));
+    // diagnostic only - restrict to firstcall: an active scan forces the radio off the
+    // connected channel, which can itself drop the just-restored STA link and cause the
+    // next gateway ping to fail, retriggering this same restart path in a loop
+    if (firstcall) {
+      int numNetworks = WiFi.scanNetworks();
+      for (int i=0; i < numNetworks; i++) {
+        if (WiFi.SSID(i) == ST_SSID)
+          LOG_INF("Wifi stats for %s - BSSID: %s; signal strength: %ld dBm; Encryption: %s; channel: %ld",  ST_SSID, WiFi.BSSIDstr(i).c_str(), WiFi.RSSI(i), getEncType(i), WiFi.channel(i));
+      }
     }
     if (wlStat != WL_CONNECTED) LOG_WRN("SSID %s not connected %s", ST_SSID, wifiStatusStr(wlStat));
   }
