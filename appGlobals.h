@@ -16,7 +16,6 @@
 #define HTTP_PORT 80 // app access
 #define HTTPS_PORT 443 // secure app access
 
-
 /*********************** Fixed defines leave as is ***********************/ 
 /** Do not change anything below here unless you know what you are doing **/
 
@@ -31,7 +30,7 @@
 #define MIN_PSRAM 4
 
 #define APP_NAME "ESP32_AdBlocker" // max 15 chars
-#define APP_VER "3.4"
+#define APP_VER "3.5"
 
 #define HTTP_CLIENTS 2 // http, ws
 #define MAX_STREAMS 0
@@ -39,7 +38,7 @@
 #define FILE_NAME_LEN 64
 #define IN_FILE_NAME_LEN 128
 #define JSON_BUFF_LEN (1024 * 4) // set big enough to hold json string
-#define MAX_CONFIGS 60 // > number of entries in configs.txt
+#define MAX_CONFIGS 70 // > number of entries in configs.txt
 #define GITHUB_PATH "/s60sc/ESP32_AdBlocker/main"
 #define CUSTOM_FILE_PATH DATA_DIR "/custom" TEXT_EXT
 
@@ -61,7 +60,7 @@
 #define INCLUDE_WEBDAV true   // webDav.cpp (WebDAV protocol)
 
 // to determine if newer data files need to be loaded
-#define CFG_VER 6
+#define CFG_VER 7
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3 
 #define SERVER_STACK_SIZE (1024 * 8)
@@ -133,4 +132,12 @@ IPAddress resolveDomain(const char* domainName); // Legacy wrapper: returns IP o
 /******************** Global app declarations *******************/
 
 extern const char* appConfig;
+
+// Adjust Brightness
+#define LED_R_MAX        255   // per-channel max, lets you color-balance (dim blue etc)
+#define LED_G_MAX        255
+#define LED_B_MAX        255
+
+enum LedState { LED_OK = 0, LED_OFFLINE, LED_DOWNLOAD, LED_AP_MODE, LED_FAIL };
+void setLedState(LedState s);
 

@@ -82,23 +82,20 @@ void loadCerts() {
 
 #endif
 
+/*****************************************************************/
+
+TaskHandle_t checkDataHandle = NULL;
+
 static bool wgetFile(const char* filePath) {
   // download required data file from github repository and store
   bool res = false;
-  if (STORAGE.exists(filePath)) {
-    // if file exists but is empty, delete it to allow re-download
-    File f = STORAGE.open(filePath, FILE_READ);
-    size_t fSize = f.size();
-    f.close();
-    if (!fSize) STORAGE.remove(filePath);
-  }
   if (!STORAGE.exists(filePath)) {
-    char downloadURL[150];
-    snprintf(downloadURL, 150, "%s%s", GITHUB_PATH, filePath);
-    File f = STORAGE.open(filePath, FILE_WRITE);
-    if (f) {
-      NetworkClientSecure wclient;
-      if (remoteServerConnect(wclient, GITHUB_HOST, HTTPS_PORT, SETASSIST)) {
+    NetworkClientSecure wclient;
+    if (remoteServerConnect(wclient, GITHUB_HOST, HTTPS_PORT, SETASSIST)) {
+      char downloadURL[150];
+      snprintf(downloadURL, 150, "%s%s", GITHUB_PATH, filePath);
+      File f = STORAGE.open(filePath, FILE_WRITE);
+      if (f) {
         HTTPClient https;
         if (https.begin(wclient, GITHUB_HOST, HTTPS_PORT, downloadURL)) {
           LOG_INF("Downloading %s from %s", filePath, downloadURL);
@@ -121,47 +118,53 @@ static bool wgetFile(const char* filePath) {
             STORAGE.remove(filePath);
           }
         }
-      }
-      remoteServerClose(wclient);
-    } else LOG_WRN("Open failed: %s", filePath);
+      } else LOG_WRN("Open failed: %s", filePath);
+    }
+    remoteServerClose(wclient);
   } else res = true;
   return res;
 }
 
-TaskHandle_t checkDataHandle = NULL;
-static bool checkRes = false;
-static bool checkDone = false;
-
 static void checkDataFilesTask(void* parameter) {
-  // check if files exist or can be downloade
-  if (WiFi.status() == WL_NO_SSID_AVAIL) LOG_WRN("Need to connect to AP to setup router");
-  else if (WiFi.status() != WL_CONNECTED) LOG_WRN("No internet connection to download files");
-  else {
-    // get each remote file in turn
-    if (strlen(GITHUB_PATH)) {
-      checkRes = wgetFile(COMMON_JS_PATH); 
-      if (checkRes) checkRes = wgetFile(INDEX_PAGE_PATH); 
-      if (checkRes) checkRes = appDataFiles(); 
-    } else checkRes = true; // no download needed if GITHUB_PATH not defined
-    getExtIP();
-  }
-  checkDone = true;
+  // try and get get each remote file in turn
+  wgetFile(COMMON_JS_PATH); 
+  delay(100);
+  wgetFile(INDEX_PAGE_PATH);
+  delay(100);
+  appDataFiles(); 
+  doRestart("Restart after web file download");
   vTaskDelete(NULL);
 }
 
-bool checkDataFiles() {
-  // Download any missing data files
-  LOG_INF("Wait for web files to be downloaded");
-  checkDone = checkRes = false;
-  if (checkDataHandle == NULL) {
-    // separate temporary task due to TLS stack usage
-    if (!strcmp(storageType, "SD_MMC")) xTaskCreateWithCaps(&checkDataFilesTask, "checkDataFilesTask", CHECK_STACK_SIZE, NULL, CHECK_PRI, &checkDataHandle, STACK_MEM);
-    else xTaskCreate(&checkDataFilesTask, "checkDataFilesTask", CHECK_STACK_SIZE, NULL, CHECK_PRI, &checkDataHandle); // cant use PSRAM as SPI conflict with flash storage
+static bool checkFilePresent(const char* filePath) {
+  if (STORAGE.exists(filePath)) {
+    // if file exists but is empty, delete it to allow re-download
+    File f = STORAGE.open(filePath, FILE_READ);
+    size_t fSize = f.size();
+    f.close();
+    if (!fSize) STORAGE.remove(filePath);
   }
-  // wait for task to finish
-  while (!checkDone) delay(2000);
-  dataFilesChecked = checkRes;
-  return checkRes;
+  return STORAGE.exists(filePath);
+}
+
+void checkDataFiles() {
+  // check if required files have been downloaded
+  bool res = true;
+  if (strlen(GITHUB_PATH)) { 
+     res = checkFilePresent(COMMON_JS_PATH);
+    if (res) res = checkFilePresent(INDEX_PAGE_PATH);
+    if (!res) {
+      // separate transient download task due to TLS memory usage 
+      if (WiFi.status() == WL_NO_SSID_AVAIL) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Need to connect to AP to setup router");
+      else if (WiFi.status() != WL_CONNECTED) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "No internet connection to download files");
+      else if (checkDataHandle == NULL) {
+        LOG_INF("Download web files then restart");
+        xTaskCreate(&checkDataFilesTask, "checkDataFilesTask", CHECK_STACK_SIZE, NULL, CHECK_PRI, &checkDataHandle);
+      }
+      if (strlen(startupFailure)) LOG_WRN("%s", startupFailure);
+    } // else no download needed if GITHUB_PATH not defined
+  }
+  if (res) dataFilesChecked = true;
 }
 
 const char* setupPage_html = R"~(

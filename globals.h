@@ -121,7 +121,7 @@ bool calcProgress(int progressVal, int totalVal, int percentReport, uint8_t &pcP
 bool changeExtension(char* fileName, const char* newExt);
 bool checkAlarm();
 bool checkAuth(httpd_req_t* req);
-bool checkDataFiles();
+void checkDataFiles();
 bool checkFreeStorage();
 bool checkI2Cdevice(const char* devName);
 void checkMemory(const char* source = "");
@@ -176,6 +176,7 @@ void prepSMTP();
 bool prepTelegram();
 void prepTemperature();
 void prepUpload();
+void printAllTasksInfo();
 void reloadConfigs();
 float readInternalTemp();
 float readTemperature(bool isCelsius, bool onlyDS18 = false);

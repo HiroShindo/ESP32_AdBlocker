@@ -78,7 +78,7 @@ TaskHandle_t statusCheckHandle = NULL;
 
 static inline void runStatusCheck();
 static bool startPing();
-static bool waitForNTPsync(int maxRetries = 10, uint32_t perTryTimeoutMs = 2000);
+static bool waitForNTPsync(int maxRetries = 5, uint32_t perTryTimeoutMs = 2000);
 char timezone[FILE_NAME_LEN] = "GMT0";
 char ntpServer[MAX_HOST_LEN] = "pool.ntp.org";
 
@@ -410,8 +410,13 @@ bool startNetwork(bool firstcall) {
 #ifdef DEV_ONLY
   devCheck();
 #endif
-  if (res) res = checkDataFiles();
   if (res) runStatusCheck();
+  else {
+    snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to complete network setup");
+    LOG_WRN("%s", startupFailure);
+  }
+  if (res) getExtIP();
+  if (res) while(!dataFilesChecked) delay (1000);
   return res;
 }
 
@@ -624,7 +629,6 @@ bool remoteServerConnect(Client& client, const char* host, uint16_t port, uint8_
       if (millis() - start > (uint32_t)responseTimeoutSecs * 1000) break;
       delay(500); 
     }
-
     // Final status & error reporting
     if (client.connected()) {
       failCounts[idx] = 0;
@@ -646,24 +650,15 @@ static bool remoteServerConnectSec(NetworkClientSecure& client, const char* host
         failCounts[idx]++;
         return false;
       }
-      for (int i=0; i<2; i++) {
-        if (remoteServerConnect(static_cast<Client&>(client), host, port, idx)) return true;
-        else {
-          // failed to connect in allocated time
-          // 'Memory allocation failed' indicates lack of heap space
-          // 'Generic error' can indicate DNS failure
-          char buf[100];
-          int err = client.lastError(buf, sizeof(buf));
-          LOG_WRN("Failed to securely connect to %s: Err %d: %s", host, err, buf);
-          if (i < 1) {
-            if (useSecure) return false; // user needs cert check
-            // retry without cert check
-            LOG_ALT("Retrying TLS connection to %s without certificate check", host);
-            client.stop();          // reset TLS session state before retrying
-            client.setInsecure();   // disable host and cert checks
-            failCounts[idx] = 0;
-          }
-        }
+      if (remoteServerConnect(static_cast<Client&>(client), host, port, idx)) return true;
+      else {
+        // failed to connect in allocated time
+        // 'Memory allocation failed' indicates lack of heap space
+        // 'Generic error' can indicate DNS failure
+        char buf[100];
+        int err = client.lastError(buf, sizeof(buf));
+        LOG_WRN("Failed to %s connect to %s: Err %d: %s", useSecure ? "securely" : "insecurely", host, err, buf);
+        return false;
       }
     } else LOG_WRN("Remote server certificate checks require a valid device datetime");
   }
@@ -672,13 +667,15 @@ static bool remoteServerConnectSec(NetworkClientSecure& client, const char* host
 
 bool remoteServerConnect(NetworkClientSecure& client, const char* host, uint16_t port, const char* cert, uint8_t idx) {
   // Configure security using own public certs
-  client.setCACert(cert);
+  if (useSecure) client.setCACert(cert);
+  else client.setInsecure(); 
   return remoteServerConnectSec(client, host, port, idx);
 }
 
 bool remoteServerConnect(NetworkClientSecure& client, const char* host, uint16_t port, uint8_t idx) {
-  // Configure security using certs from IDF ESP x509 Certificate Bundle 
-  client.setCACertBundle(x509_certificate_bundle_start, (size_t)(x509_certificate_bundle_end - x509_certificate_bundle_start)); 
+  // Configure security using certs from IDF ESP x509 Certificate Bundle
+  if (useSecure) client.setCACertBundle(x509_certificate_bundle_start, (size_t)(x509_certificate_bundle_end - x509_certificate_bundle_start)); 
+  else client.setInsecure(); 
   return remoteServerConnectSec(client, host, port, idx);
 }
 
@@ -719,7 +716,7 @@ static bool waitForNTPsync(int maxRetries, uint32_t perTryTimeoutMs) {
     int retry = 0;
     while (!getLocalTime(&timeinfo, perTryTimeoutMs) && retry < maxRetries) retry++;
     if (retry >= maxRetries) {
-      LOG_WRN("Time sync with NTP failed after %d retries", maxRetries);
+      LOG_WRN("Time sync with NTP failed, retry");
       return false;
     }
     LOG_INF("Time synced with NTP: %s, using timezone: %s", ntpServer, timezone);
@@ -855,8 +852,8 @@ static void statusCheckTask(void* parameter) {
   while (true) {
     // regular status checks
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (!timeSynchronized) waitForNTPsync();
     if (!dataFilesChecked) checkDataFiles();
+    if (!timeSynchronized) waitForNTPsync();
     if (appSetupDone) doAppPing(timeSynchronized);
     checkScheduledRestart();
 #if INCLUDE_MQTT
@@ -1221,7 +1218,6 @@ bool utilsStartup() {
   if (statusCheckHandle == NULL) {
     if (!strcmp(storageType, "SD_MMC")) xTaskCreateWithCaps(&statusCheckTask, "statusCheckTask", STATUS_STACK_SIZE, NULL, STATUS_PRI, &statusCheckHandle, STACK_MEM);
     else xTaskCreate(&statusCheckTask, "statusCheckTask", STATUS_STACK_SIZE, NULL, STATUS_PRI, &statusCheckHandle); // cant use PSRAM as SPI conflict with flash storage
-  }
-  
+  } 
   return res;
 }
