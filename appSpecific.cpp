@@ -918,7 +918,7 @@ AP_gw~~0~T~AP Mode Gateway
 useHttps~0~0~C~Enable HTTPS connection to app
 useSecure~0~0~C~Must check remote server certificates
 allowAP~1~0~C~Enable AP Mode If Fail to Connect SSID
-timezone~GMT0~1~T~Timezone string: tinyurl.com/TZstring
+timezone~JST-9~1~T~Timezone string: tinyurl.com/TZstring
 logType~0~99~N~Output log selection
 Auth_Name~~0~T~Admin user name for WebPage
 Auth_Pass~~0~T~Admin password for WebPage
