@@ -1,6 +1,8 @@
 # ESP32_AdBlocker
 
-ESP32_AdBlocker acts as a DNS Sinkhole (like [Pi-Hole](https://pi-hole.net/)) by returning 0.0.0.0 for any domain names in its blocklist, else uses an external DNS server to resolve IP addresses. This prevents content being retrieved from or sent to blocked domains. A web server is provided to control the service and monitor its operation. 
+ESP32_AdBlocker acts as a DNS Sinkhole (like [Pi-Hole](https://pi-hole.net/)) by returning 0.0.0.0 for any domain names in its blocklist, else uses an external DNS server to resolve IP addresses. This prevents content being retrieved from or sent to blocked domains. A web server is provided to control the service and monitor its operation.
+
+Version 3.5 includes enhancements to DNS query handling and [LED status](#led-status) by user [@dateno1](https://github.com/dateno1)
 
 ## Requirements
 
@@ -28,6 +30,7 @@ The entries on the ESP32_AdBlocker web page are:
   * After entering domain URL to check if in blocklist, press **CheckDomain** button. Alert message will show result.
 * **Stop Blocklist Load**: Press **StopLoad** button to stop the currently downloading blocklist.
 * **Clear custom blocklist**: Clear the custom entries manually added or removed by user
+* **Enable AdBlocker**: Toggle Ad blocking on or off
 
 
 To make ESP32_AdBlocker your preferred DNS server, enter its IPv4 address in place of the current DNS server IPs in your router / devices. ESP32_AdBlocker does not have an IPv6 address but some devices use IPv6 by default, so disable IPv6 DNS on your device / router to force it to use IPv4 DNS.  
@@ -82,4 +85,27 @@ Options:
 * **WiFi**: default, also fallback if Ethernet cannot be connected
 * **Eth+AP**: Ethernet plus ESP Access Point. Do not open web pages on each network concurrently.
 * **Ethernet**: Ethernet only, no Wifi
+
+## LED Status
+
+An onboard or external LED can be use to signal the status of the app, depending on the type of LED available:
+
+Simple LED:
+* AP Mode: Slow blink
+* Active: Steady
+* Offline: Very slow blink
+* Failure: Fast blink
+* Downloading hosts: Medium blink
+
+W2812 RGB LED:
+* AP Mode: Slow blink Yellow
+* Active: Steady Green
+* Offline: Very slow blink Teal
+* Failure: Fast blink Red
+* Downloading hosts: Medium blink Blue
+* Attempting to download hosts without internet: Flashing Purple
+
+The LED is configured using the **Settings** button in the web page tab **Edit Config**.  
+Setting the LED Pin value to 0 disables the LED.
+
 

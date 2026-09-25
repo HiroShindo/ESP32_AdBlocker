@@ -11,175 +11,170 @@ Usage:
 
 #include "appGlobals.h"
 
-static std::string extractNestedValue(const std::string& jsonObject, const std::string& nestedKey);
+struct Slice {
+    const char* ptr;
+    size_t len;
+};
 
-static void skipWhitespace(const std::string& json, size_t& pos) {
-  while (pos < json.length() && std::isspace(json[pos])) pos++;
+static Slice extractNestedValue(const char* obj, size_t len, const char* nestedKey, size_t nestedKeyLen);
+
+static inline void skipWhitespace(const char*& p, const char* end) {
+  while (p < end && isspace(static_cast<unsigned char>(*p))) p++;
 }
 
-static std::string parseString(const std::string& json, size_t& pos) {
-  if (json[pos] != '"') return "";
-  pos++; // Skip opening quote
-  
-  size_t start = pos;
-  while (pos < json.length()) {
-    if (json[pos] == '\\') pos += 2; // Skip escaped character
-    else if (json[pos] == '"') {
-      std::string result = json.substr(start, pos - start);
-      pos++; // Skip closing quote
-      return result;
-    } else pos++;
+static Slice parseString(const char*& p, const char* end) {
+  if (p >= end || *p != '"') return {nullptr, 0};
+  p++; // skip opening quote
+  const char* start = p;
+  while (p < end) {
+    if (*p == '\\') p += 2; // skip escaped char
+    else if (*p == '"') {
+      size_t len = p - start;
+      p++; // skip closing quote
+      return {start, len};
+    } else p++;
   }
-  return "";
+  return {nullptr, 0};
 }
 
-static void skipValue(const std::string& json, size_t& pos) {
-  if (json[pos] == '"') parseString(json, pos);
-  else if (json[pos] == '{') {
+static void skipValue(const char*& p, const char* end) {
+  if (p >= end) return;
+  if (*p == '"') {
+    (void)parseString(p, end);
+    return;
+  }
+
+  if (*p == '{') {
     int depth = 1;
-    pos++;
-    while (pos < json.length() && depth > 0) {
-      if (json[pos] == '"') parseString(json, pos);
-      else if (json[pos] == '{') {
-        depth++;
-        pos++;
-      } else if (json[pos] == '}') {
-        depth--;
-        pos++;
-      } else pos++;
+    p++;
+    while (p < end && depth > 0) {
+      if (*p == '"') parseString(p, end);
+      else if (*p == '{') { depth++; p++; }
+      else if (*p == '}') { depth--; p++; }
+      else p++;
     }
-  } else if (json[pos] == '[') {
-    int depth = 1;
-    pos++;
-    while (pos < json.length() && depth > 0) {
-      if (json[pos] == '"') parseString(json, pos);
-      else if (json[pos] == '[') {
-        depth++;
-        pos++;
-      } else if (json[pos] == ']') {
-        depth--;
-        pos++;
-      } else pos++;
-    }
-  } else {
-    // Number, boolean, null
-    while (pos < json.length() && 
-         json[pos] != ',' && 
-         json[pos] != '}' && 
-         json[pos] != ']') {
-      pos++;
-    }
+    return;
   }
+
+  if (*p == '[') {
+    int depth = 1;
+    p++;
+    while (p < end && depth > 0) {
+      if (*p == '"') parseString(p, end);
+      else if (*p == '[') { depth++; p++; }
+      else if (*p == ']') { depth--; p++; }
+      else p++;
+    }
+    return;
+  }
+  // Number, boolean, null
+  while (p < end && *p != ',' && *p != '}' && *p != ']') p++;
 }
 
-static std::string parseValue(const std::string& json, size_t& pos) {
-  size_t start = pos;
-  if (json[pos] == '"') return parseString(json, pos);
-  else if (json[pos] == '{' || json[pos] == '[') {
-    skipValue(json, pos);
-    return json.substr(start, pos - start);
-  } else {
-    // Number, boolean, null - trim whitespace
-    while (pos < json.length() && json[pos] != ',' 
-      && json[pos] != '}' && json[pos] != ']' && !std::isspace(json[pos])) pos++;
+
+static Slice parseValue(const char*& p, const char* end) {
+  if (p >= end) return {nullptr, 0};
+  const char* start = p;
+  if (*p == '"') return parseString(p, end);
+
+  if (*p == '{' || *p == '[') {
+    skipValue(p, end);
+    return {start, size_t(p - start)};
   }
-  std::string result = json.substr(start, pos - start);
+  // Number, boolean, null - trim whitespace
+  while (p < end && *p != ',' && *p != '}' &&*p != ']' && !isspace(static_cast<unsigned char>(*p))) p++;
+
   // Trim trailing whitespace
-  size_t end = result.find_last_not_of(" \t\n\r");
-  return (end != std::string::npos) ? result.substr(0, end + 1) : result;
+  const char* finish = p;
+  while (finish > start && isspace(static_cast<unsigned char>(*(finish - 1)))) finish--;
+  
+  return {start, size_t(finish - start)};
 }
 
-// Recursively search through entire JSON structure for nth occurrence
-static std::string findNthOccurrence(const std::string& json, size_t& pos, const std::string& key, int& occurrence, int targetOccurrence, bool extractNested = false, const std::string& nestedKey = "") {
-  skipWhitespace(json, pos);
-  if (pos >= json.length()) return "";
-  if (json[pos] == '{') {
-    pos++;
-    
-    while (pos < json.length()) {
-      skipWhitespace(json, pos);
-      
-      if (json[pos] == '}') {
-          pos++;
-          break;
-      }
-      
-      // Parse key
-      std::string currentKey = parseString(json, pos);
-      skipWhitespace(json, pos);
-      
-      if (pos >= json.length() || json[pos] != ':') return "";
-      pos++;
-      skipWhitespace(json, pos);
-      
-      // Check if this is our key
-      if (currentKey == key) {
+static Slice findNthOccurrence(const char*& p, const char* end, const char* key, size_t keyLen, int& occurrence, int targetOccurrence, bool extractNested, const char* nestedKey, size_t nestedKeyLen) {
+  // Recursively search through entire JSON structure for nth occurrence
+  skipWhitespace(p, end);
+  if (p >= end) return {nullptr, 0};
+
+  if (*p == '{') {
+    p++;
+    while (p < end) {
+      skipWhitespace(p, end);
+      if (p >= end) break;
+      if (*p == '}') { p++; break; }
+
+      Slice k = parseString(p, end);
+      skipWhitespace(p, end);
+      if (p >= end || *p != ':') return {nullptr, 0};
+      p++;
+      skipWhitespace(p, end);
+
+      bool match = (k.len == keyLen && memcmp(k.ptr, key, keyLen) == 0);
+      if (match) {
         occurrence++;
         if (occurrence == targetOccurrence) {
-          std::string value = parseValue(json, pos);
-          // If we need to extract a nested value from the object
-          if (extractNested && !nestedKey.empty() && !value.empty() && value[0] == '{') {
-            return extractNestedValue(value, nestedKey);
-          }
-          return value;
-        } else skipValue(json, pos);
+          Slice v = parseValue(p, end);
+          if (extractNested && v.ptr && v.len && *v.ptr == '{') return extractNestedValue(v.ptr, v.len, nestedKey, nestedKeyLen);
+          return v;
+        } else skipValue(p, end);
       } else {
-        // Recursively search in nested structures
-        if (json[pos] == '{' || json[pos] == '[') {
-          std::string result = findNthOccurrence(json, pos, key, occurrence, targetOccurrence, extractNested, nestedKey);
-          if (!result.empty()) return result;
-        } else skipValue(json, pos);
+        if (*p == '{' || *p == '[') {
+          Slice r = findNthOccurrence(p, end, key, keyLen, occurrence, targetOccurrence, extractNested, nestedKey, nestedKeyLen);
+          if (r.ptr) return r;
+        } else skipValue(p, end);
       }
-      
-      skipWhitespace(json, pos);
-      if (pos < json.length() && json[pos] == ',') pos++;
-    }
-  } else if (json[pos] == '[') {
-    pos++;
-    
-    while (pos < json.length()) {
-      skipWhitespace(json, pos);
-      
-      if (json[pos] == ']') {
-        pos++;
-        break;
-      }
-      
-      // Recursively search array elements
-      if (json[pos] == '{' || json[pos] == '[') {
-        std::string result = findNthOccurrence(json, pos, key, occurrence, targetOccurrence, extractNested, nestedKey);
-        if (!result.empty()) return result;
-      } else skipValue(json, pos);
 
-      skipWhitespace(json, pos);
-      if (pos < json.length() && json[pos] == ',') pos++;
+      skipWhitespace(p, end);
+      if (p < end && *p == ',') p++;
     }
   }
-  return "";
+
+  else if (*p == '[') {
+    p++;
+    // Recursively search array elements
+    while (p < end) {
+      skipWhitespace(p, end);
+      if (p >= end) break;
+      if (*p == ']') { p++; break; }
+      if (*p == '{' || *p == '[') {
+        Slice r = findNthOccurrence(p, end, key, keyLen, occurrence, targetOccurrence, extractNested, nestedKey, nestedKeyLen);
+        if (r.ptr) return r;
+      } else skipValue(p, end);
+      skipWhitespace(p, end);
+      if (p < end && *p == ',') p++;
+    }
+  }
+
+  return {nullptr, 0};
 }
 
-// New helper function to extract a nested value
-static std::string extractNestedValue(const std::string& jsonObject, const std::string& nestedKey) {
-  size_t pos = 0;
+static Slice extractNestedValue(const char* obj, size_t len, const char* nestedKey, size_t nestedKeyLen) {
+  const char* p = obj;
+  const char* end = obj + len;
   int count = 0;
-  return findNthOccurrence(jsonObject, pos, nestedKey, count, 1);
+  return findNthOccurrence(p, end, nestedKey, nestedKeyLen, count, 1, false, nullptr, 0);
 }
 
-// Updated function signatures
 bool getJsonValue(const char* json, const char* key, char* value, const char* nestedKey, int occurrence) {
   // Returns nth occurrence (1-indexed, default is 1)
   // If nestedKey is provided, extracts that field from the object value
-  std::string jsonStr = json;
-  std::string keyStr = key;
+  if (!json || !key || !value) return false;
+
+  const char* p = json;
+  const char* end = json + strlen(json);
+  size_t keyLen = strlen(key);
+  size_t nestedKeyLen = nestedKey ? strlen(nestedKey) : 0;
   if (occurrence < 1) occurrence = 1;
-  size_t pos = 0;
   int count = 0;
-  
-  bool extractNested = (nestedKey != nullptr && strlen(nestedKey) > 0);
-  std::string nestedKeyStr = extractNested ? nestedKey : "";
-  
-  std::string retvalue = findNthOccurrence(jsonStr, pos, keyStr, count, occurrence, extractNested, nestedKeyStr);
-  strncpy(value, retvalue.c_str(), FILE_NAME_LEN - 1);
-  value[FILE_NAME_LEN - 1] = '\0';
-  return retvalue.length() ? true : false;
+  Slice result = findNthOccurrence(p, end, key, keyLen, count, occurrence, nestedKey && nestedKey[0], nestedKey, nestedKeyLen);
+
+  if (!result.ptr) {
+    value[0] = '\0';
+    return false;
+  }
+
+  size_t len = min(result.len, size_t(FILE_NAME_LEN - 1));
+  memcpy(value, result.ptr, len);
+  value[len] = '\0';
+  return true;
 }

@@ -428,7 +428,7 @@ static esp_err_t sendCrossOriginHeader(httpd_req_t *req) {
   return ESP_OK;
 }
 
-static bool checkWsSocketStatus() {
+static inline bool checkWsSocketStatus() {
   // Check if connection is active and is a WebSocket
   return (httpd_ws_get_fd_info(httpServer, fdWs) == HTTPD_WS_CLIENT_WEBSOCKET) ? true : false;
 }

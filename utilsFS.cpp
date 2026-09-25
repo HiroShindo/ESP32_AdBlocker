@@ -18,6 +18,9 @@
 #include "ff.h"
 #include "vfs_fat_internal.h"
 
+// choose file sytem to use by assigning one of following values to #define STORAGE in file appGlobals.h:
+// - SD_MMC, LittleFS, FFat, SPIFFS
+
 // Storage settings
 int sdMinCardFreeSpace = 100; // Minimum amount of card free Megabytes before sdFreeSpaceMode action is enabled
 int sdFreeSpaceMode = 1; // 0 - No Check, 1 - Delete oldest dir, 2 - Upload oldest dir to FTP/HFS and then delete on SD 
@@ -27,10 +30,10 @@ static bool use1bitMode = true;
 static int sdmmcFreq = BOARD_MAX_SDMMC_FREQ; // board specific default SD_MMC speed
 #endif
 
-enum fsInd {SDMMC, LITTLEFS, SPIFFSS, TBD};
+enum fsInd {SDMMC, LITTLEFS, SPIFFSS, FATFSS, TBD};
 static fsInd thisFS = TBD; 
-static const char* fsTypes[] = {"SD_MMC", "LittleFS", "SPIFFS", "TBD"};
-static const char* fsPaths[] = {"/sdcard", "/littlefs", "/spiffs"};
+static const char* fsTypes[] = {"SD_MMC", "LittleFS", "SPIFFS", "FatFS", "TBD"};
+static const char* fsPaths[] = {"/sdcard", "/littlefs", "/spiffs", "/ffat", "/tbd"};
 
 // hold sorted list of filenames/folders names in order of newest first
 static std::vector<std::string> fileVec;
@@ -129,7 +132,7 @@ bool startStorage() {
     return res; 
   }
 #endif
-  // One of SPIFFS or LittleFS
+  // One of SPIFFS, LittleFS, FatFS
   if (thisFS == TBD) {
 #ifdef _SPIFFS_H_
     if ((fs::SPIFFSFS*)&STORAGE == &SPIFFS) {
@@ -143,6 +146,14 @@ bool startStorage() {
       res = LittleFS.begin(formatIfMountFailed);
       // create data folder if not present
       if (res) LittleFS.mkdir(DATA_DIR);
+    }
+#endif
+#ifdef _FATFS_H_
+    if ((fs::FATFS*)&STORAGE == &FFat) {
+      thisFS = FATFSS;
+      res = FFat.begin(formatIfMountFailed);
+      // create data folder if not present
+      if (res && !FFat.exists(DATA_DIR)) FFat.mkdir(DATA_DIR);
     }
 #endif
   }
@@ -377,10 +388,10 @@ esp_err_t downloadFile(File& df, httpd_req_t* req) {
   // setup download header, create zip file if required, and download file
   esp_err_t res = ESP_OK;
   bool needZip = false;
-  char downloadName[FILE_NAME_LEN];
+  char downloadName[IN_FILE_NAME_LEN];
   strcpy(downloadName, df.name());
   size_t downloadSize = df.size();
-  char fsSavePath[FILE_NAME_LEN];
+  char fsSavePath[IN_FILE_NAME_LEN];
   strcpy(fsSavePath, inFileName);
 #ifdef ISCAM
   changeExtension(fsSavePath, CSV_EXT);

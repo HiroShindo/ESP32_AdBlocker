@@ -2,15 +2,15 @@
 //
 // s60sc 2021, 2022
 
+#pragma once
+
 #include "esp_arduino_version.h"
 
 #if ESP_ARDUINO_VERSION < ESP_ARDUINO_VERSION_VAL(3, 1, 1)
 #error Must be compiled with arduino-esp32 core v3.1.1 or higher
 #endif
 
-#pragma once
-
-#if __has_include("./devUtilities.cpp")
+#if __has_include("../devUtilities.cpp")
 #define DEV_ONLY
 #endif
 #ifdef DEV_ONLY
@@ -39,6 +39,7 @@
 #include <SD_MMC.h>
 #endif
 #include <LittleFS.h>
+#include <FFat.h>
 #include <sstream>
 #include <Update.h>
 #include <WiFi.h>
@@ -56,7 +57,7 @@
 // ADC
 #define ADC_ATTEN ADC_11db
 #define ADC_SAMPLES 16
-#if CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32S2
 #define ADC_BITS 13
 #define MAX_ADC 8191 // maximum ADC value at given resolution
 #else
@@ -91,7 +92,7 @@
 #define BOUNDARY_VAL "123456789000000000000987654321"
 #define SF_LEN 128
 #define WAV_HDR_LEN 44
-#define RAM_LOG_LEN (1024 * 7) // size of system message log in bytes stored in slow RTC ram (max 8KB - vars)
+#define RAM_LOG_LEN (512 * 13) // size of system message log in bytes stored in slow RTC ram (max 8KB - vars)
 #define MIN_STACK_FREE 512
 #define STARTUP_FAIL "Startup Failure: "
 #define MAX_PAYLOAD_LEN 672 // set bigger than any incoming websocket payload (20ms audio)
@@ -105,6 +106,7 @@
 
 // global mandatory app specific functions, in appSpecific.cpp 
 bool appDataFiles();
+bool appSetup(); 
 esp_err_t appSpecificSustainHandler(httpd_req_t* req);
 esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const char* value);
 void appSpecificWsBinHandler(uint8_t* wsMsg, size_t wsMsgLen);
@@ -119,7 +121,7 @@ bool calcProgress(int progressVal, int totalVal, int percentReport, uint8_t &pcP
 bool changeExtension(char* fileName, const char* newExt);
 bool checkAlarm();
 bool checkAuth(httpd_req_t* req);
-bool checkDataFiles();
+void checkDataFiles();
 bool checkFreeStorage();
 bool checkI2Cdevice(const char* devName);
 void checkMemory(const char* source = "");
@@ -174,6 +176,7 @@ void prepSMTP();
 bool prepTelegram();
 void prepTemperature();
 void prepUpload();
+void printAllTasksInfo();
 void reloadConfigs();
 float readInternalTemp();
 float readTemperature(bool isCelsius, bool onlyDS18 = false);
@@ -181,6 +184,7 @@ float readVoltage();
 void remote_log_init();
 void remoteServerClose(Client& client);
 bool remoteServerConnect(Client& client, const char* host, uint16_t port, uint8_t idx);
+bool remoteServerConnect(NetworkClientSecure& client, const char* host, uint16_t port, uint8_t idx);
 bool remoteServerConnect(NetworkClientSecure& client, const char* host, uint16_t port, const char* cert, uint8_t idx);
 void remoteServerReset();
 void removeChar(char* s, char c);
@@ -283,6 +287,8 @@ extern bool usePing; // set to false if problems related to this issue occur: ht
 extern uint16_t sustainId;
 extern bool heartBeatDone;
 extern TaskHandle_t heartBeatHandle;
+extern TaskHandle_t checkDataHandle;
+extern TaskHandle_t statusCheckHandle;
 extern char portFwd[];
 extern float latLon[];
 extern uint32_t deepSleepTimer;
@@ -326,15 +332,6 @@ extern char tgramToken[];
 extern char tgramChatId[];
 extern char tgramHdr[];
 
-// certificates
-extern const char* git_rootCACertificate;
-extern const char* ftps_rootCACertificate;
-extern const char* smtp_rootCACertificate;
-extern const char* mqtt_rootCACertificate;
-extern const char* telegram_rootCACertificate;
-extern const char* hfs_rootCACertificate;
-extern char* serverCerts[];
-
 // web serve
 extern char timezone[];
 extern char ntpServer[];
@@ -343,6 +340,7 @@ extern const char* otaPage_html;
 extern const char* failPageS_html;
 extern const char* failPageE_html;
 extern char startupFailure[];
+extern char* serverCerts[];
 
 // app status
 extern uint8_t alarmHour;
@@ -360,11 +358,13 @@ extern int wakePin;
 extern int wakeLevel;
 extern UBaseType_t uxHighWaterMarkArr[];
 extern UBaseType_t STACK_MEM;
+extern bool appSetupDone;
 
 // SD storage
 extern int sdMinCardFreeSpace; // Minimum amount of card free Megabytes before freeSpaceMode action is enabled
 extern int sdFreeSpaceMode; // 0 - No Check, 1 - Delete oldest dir, 2 - Upload to ftp and then delete folder on SD 
 extern bool formatIfMountFailed ; // Auto format the file system if mount failed. Set to false to not auto format.
+extern const char* storageType;
 
 // I2C pins
 extern int I2Csda;
@@ -450,7 +450,7 @@ void logIncrementDropCount();
   LOG_SEND("[%s %s] " format "~\n", esp_log_system_timestamp(), __FUNCTION__, ##__VA_ARGS__)
 
 #define LOG_WRN(format, ...) \
-  LOG_SEND(LOG_COLOR_W "[%s WARN %s] " format LOG_NO_COLOR "~\n", esp_log_system_timestamp(), __FUNCTION__, ##__VA_ARGS__)
+  LOG_SEND(LOG_COLOR_WRN "[%s WARN %s] " format LOG_NO_COLOR "~\n", esp_log_system_timestamp(), __FUNCTION__, ##__VA_ARGS__)
 
 #define LOG_ERR(format, ...) \
   LOG_SEND(LOG_COLOR_ERR "[%s ERROR @ %s:%u] " format LOG_NO_COLOR "~\n", esp_log_system_timestamp(), pathToFileName(__FILE__), __LINE__, ##__VA_ARGS__)
@@ -465,3 +465,4 @@ void logIncrementDropCount();
 } while(0)
 
 #define LOG_PRT(buff, bufflen) log_print_buf((const uint8_t*)buff, bufflen)
+
