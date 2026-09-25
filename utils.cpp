@@ -1246,4 +1246,4 @@ bool utilsStartup() {
     else xTaskCreate(&statusCheckTask, "statusCheckTask", STATUS_STACK_SIZE, NULL, STATUS_PRI, &statusCheckHandle); // cant use PSRAM as SPI conflict with flash storage
   } 
   return res;
-}
+}

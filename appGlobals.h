@@ -125,7 +125,7 @@ enum DnsResult : uint8_t {
   DNS_SERVFAIL = 3   // timeout / RCODE 2,4,5         -> reply RCODE 2
 };
 
-DnsResult checkBlocklist(const char* domainName, IPAddress& retIP); // Returns BLOCKED (retIP=0.0.0.0) or RESOLVED (not in list)
+DnsResult checkBlocklist(const char* domainName, IPAddress& retIP, bool forward = true); // forward=false: blocklist test only, no upstream query; Returns BLOCKED (retIP=0.0.0.0) or RESOLVED (not in list)
 DnsResult resolveDomainStatus(const char* domainName, IPAddress& retIP); // Upstream UDP resolve with cache/failover: RESOLVED, NXDOMAIN, or SERVFAIL
 IPAddress resolveDomain(const char* domainName); // Legacy wrapper: returns IP or 0.0.0.0 on any failure
 

@@ -172,7 +172,7 @@ static bool updateCustomFile(char* domainName, bool doDelete) {
   return false;
 }
 
-DnsResult checkBlocklist(const char* domainName, IPAddress& retIP) {
+DnsResult checkBlocklist(const char* domainName, IPAddress& retIP, bool forward) {
   // called from externalDNS.cpp
   // normalise the query, test blocklist, return response type + answer IP
   // normalize: strip single trailing root dot, force lowercase
@@ -215,6 +215,11 @@ DnsResult checkBlocklist(const char* domainName, IPAddress& retIP) {
     return DNS_BLOCKED;
   }
   // not in blocklist -> query forwarder, distinguishing NXDOMAIN from SERVFAIL
+  // unless caller only needs the block decision (eg HTTPS/SVCB queries answered as NODATA)
+  if (!forward) {
+    retIP = IPAddress(0, 0, 0, 0);
+    return DNS_RESOLVED;
+  }
   return resolveDomainStatus(normName, retIP);
 }
 

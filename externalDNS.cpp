@@ -78,7 +78,10 @@ static int processDNSquery(const uint8_t *rx, int len, uint8_t *tx, int txSize) 
    *   NXDOMAIN -> RCODE 3, zero answers (honest "does not exist")
    *   SERVFAIL -> RCODE 2, zero answers (upstream sick - NEVER cached) */
   IPAddress ansIP;
-  DnsResult r = checkBlocklist(domain, ansIP);
+  // only A/AAAA are ever answered with data, so other types (eg HTTPS=65) must not
+  // trigger a slow upstream lookup that would stall the single dnsTask for other clients
+  bool wantData = (qtype == 0x0001 || qtype == 0x001C);
+  DnsResult r = checkBlocklist(domain, ansIP, wantData);
   LOG_VRB("Q '%s' type=%u -> %d", domain, qtype, (int)r); 
 
   if (r == DNS_NXDOMAIN || r == DNS_SERVFAIL) {
