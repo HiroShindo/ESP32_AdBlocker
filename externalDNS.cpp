@@ -14,11 +14,14 @@
 // s60sc 2026
 
 #include "appGlobals.h"
-#include <lwip/sockets.h>   // socket/sendto/recvfrom/setsockopt/close
+#include <lwip/sockets.h>   // socket/sendto/recvfrom/setsockopt/close (sync upstream probes)
+#include <lwip/udp.h>       // raw UDP pcbs for the DNS server
+#include <lwip/tcpip.h>     // LOCK_TCPIP_CORE
 
 #define DNS_DEFAULT_PORT   53    // listening port (also reply source port)
 //#define CACHE_SIZE         20    // positive-response cache slots (round-robin)
 #define CACHE_SIZE         256    // positive-response cache slots (round-robin), allocated in PSRAM (~270 bytes each)
+#define RX_RING            128    // received datagrams buffered for dnsTask (~530 bytes each, PSRAM)
 #define PEND_MAX           64     // client queries waiting on upstream at once (~570 bytes each, PSRAM)
 #define DEFAULT_TTL        300000 // cache lifetime, ms
 #define MAX_HOSTNAME       256    // longest name we accept from clients
@@ -107,7 +110,8 @@ struct Pending {
   uint16_t qlen;                // header + question length
   uint16_t upId;                // transaction ID sent upstream
   uint32_t deadline;            // millis() when current attempt times out
-  struct sockaddr_in cli;       // client to reply to
+  ip_addr_t cliAddr;            // client to reply to
+  uint16_t cliPort;
   uint8_t q[272];               // client header+question (12 + 255 + 4 max)
   char name[MAX_HOSTNAME];      // lowercase query name, for the cache
 };
@@ -169,15 +173,63 @@ static int processDNSquery(const uint8_t *rx, int len, uint8_t *tx, int txSize, 
 /* DNS server: one task multiplexes the client socket and the upstream socket with
  * select(), so a slow upstream never blocks reading new queries (lwIP only queues
  * a few datagrams per socket, the rest are dropped). */
-static int dnsSock = -1;
-static int upSock = -1;
-static Pending *pend = NULL;
-static uint8_t rxbuf[512];
 static uint8_t txbuf[512];
+static struct udp_pcb *dnsPcb = NULL;   // :53 server pcb (also used for replies)
+static struct udp_pcb *upPcb = NULL;    // ephemeral pcb for upstream queries
+static TaskHandle_t dnsTaskHandle = NULL;
+static Pending *pend = NULL;
+
+/* Datagram ring: the raw lwIP callbacks (tcpip thread) only copy the packet in and
+ * wake dnsTask. A BSD socket would drop everything beyond ~6 queued datagrams, this
+ * ring holds RX_RING. Single producer (tcpip thread), single consumer (dnsTask). */
+struct RxItem {
+  bool fromUpstream;
+  ip_addr_t addr;
+  uint16_t port;
+  uint16_t len;
+  uint8_t data[512];
+};
+static RxItem *rxRing = NULL;
+static volatile uint32_t rxHead = 0, rxTail = 0;
+static volatile uint32_t rxDropped = 0;
+
+static void rxEnqueue(bool up, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
+  if (rxHead - rxTail >= RX_RING) { rxDropped++; return; }
+  RxItem &it = rxRing[rxHead % RX_RING];
+  it.fromUpstream = up;
+  ip_addr_copy(it.addr, *addr);
+  it.port = port;
+  it.len = pbuf_copy_partial(p, it.data, sizeof(it.data), 0);
+  __sync_synchronize();
+  rxHead = rxHead + 1;
+  if (dnsTaskHandle) xTaskNotifyGive(dnsTaskHandle);
+}
+
+static void onClientPkt(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
+  if (!p) return;
+  rxEnqueue(false, p, addr, port);
+  pbuf_free(p);
+}
+
+static void onUpstreamPkt(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
+  if (!p) return;
+  rxEnqueue(true, p, addr, port);
+  pbuf_free(p);
+}
+
+static void udpSend(struct udp_pcb *pcb, const uint8_t *data, int len, const ip_addr_t *addr, uint16_t port) {
+  struct pbuf *pb = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
+  if (!pb) return;
+  memcpy(pb->payload, data, len);
+  LOCK_TCPIP_CORE();
+  udp_sendto(pcb, pb, addr, port);
+  UNLOCK_TCPIP_CORE();
+  pbuf_free(pb);
+}
 
 static void completePending(Pending &p, ReplyKind kind, const uint8_t *addr) {
   int txLen = buildReply(txbuf, sizeof(txbuf), p.q, p.qlen, kind, addr);
-  if (txLen > 0) sendto(dnsSock, txbuf, txLen, 0, (struct sockaddr *)&p.cli, sizeof(p.cli));
+  if (txLen > 0) udpSend(dnsPcb, txbuf, txLen, &p.cliAddr, p.cliPort);
   p.used = false;
 }
 
@@ -202,15 +254,11 @@ static void sendUpstream(Pending &p) {
     qbuf[2] = 0x01; qbuf[3] = 0x00;            // RD=1
     qbuf[4] = 0; qbuf[5] = 1;                  // QDCOUNT=1
     memset(qbuf + 6, 0, 6);
-    struct sockaddr_in dst;
-    memset(&dst, 0, sizeof(dst));
-    dst.sin_family = AF_INET;
-    dst.sin_port = htons(DNS_DEFAULT_PORT);
-    dst.sin_addr.s_addr = srv;
-    if (sendto(upSock, qbuf, p.qlen, 0, (struct sockaddr *)&dst, sizeof(dst)) == p.qlen) {
-      p.deadline = millis() + RESOLVE_TIMEOUT_MS;
-      return;
-    }
+    ip_addr_t dst;
+    ip_addr_set_ip4_u32(&dst, (uint32_t)srv);
+    udpSend(upPcb, qbuf, p.qlen, &dst, DNS_DEFAULT_PORT);
+    p.deadline = millis() + RESOLVE_TIMEOUT_MS;
+    return;
   }
   completePending(p, R_SERVFAIL, NULL);
 }
@@ -222,7 +270,7 @@ static void nextServer(Pending &p) {
 
 /* Handle one datagram from an upstream server. Matched by transaction ID and
  * the server address currently being tried. */
-static void handleUpstreamReply(const uint8_t *rbuf, int rxLen, const struct sockaddr_in &from) {
+static void handleUpstreamReply(const uint8_t *rbuf, int rxLen, const ip_addr_t *from) {
   if (rxLen < 12 || !(rbuf[2] & 0x80)) return;             // too short / not a response
   uint16_t id = ((uint16_t)rbuf[0] << 8) | rbuf[1];
   const char* servers[] = {ST_ns1, ST_ns2};
@@ -230,7 +278,7 @@ static void handleUpstreamReply(const uint8_t *rbuf, int rxLen, const struct soc
     Pending &p = pend[i];
     if (!p.used || p.upId != id) continue;
     IPAddress srv;
-    if (!srv.fromString(servers[p.srv]) || from.sin_addr.s_addr != (uint32_t)srv) return; // spoof/stale
+    if (!srv.fromString(servers[p.srv]) || ip_addr_get_ip4_u32(from) != (uint32_t)srv) return; // spoof/stale
     const uint8_t wantLen = (p.qtype == 28) ? 16 : 4;
     uint8_t rcode = rbuf[3] & 0x0F;
     if (rcode == 3) { completePending(p, R_NXDOMAIN, NULL); return; }
@@ -266,11 +314,8 @@ static void handleUpstreamReply(const uint8_t *rbuf, int rxLen, const struct soc
 }
 
 static void dnsTask(void *parameter) {
-  struct sockaddr_in cli, from;
-  socklen_t clilen, fl;
-  uint8_t rbuf[512];
   for (;;) {
-    // sleep until traffic or the earliest upstream deadline
+    // sleep until a datagram arrives or the earliest upstream deadline
     uint32_t now = millis();
     int32_t waitMs = 1000;
     for (int i = 0; i < PEND_MAX; i++)
@@ -279,40 +324,29 @@ static void dnsTask(void *parameter) {
         if (d < waitMs) waitMs = d;
       }
     if (waitMs < 0) waitMs = 0;
-    fd_set rs;
-    FD_ZERO(&rs);
-    FD_SET(dnsSock, &rs);
-    FD_SET(upSock, &rs);
-    struct timeval tv;
-    tv.tv_sec = waitMs / 1000;
-    tv.tv_usec = (waitMs % 1000) * 1000;
-    select((dnsSock > upSock ? dnsSock : upSock) + 1, &rs, NULL, NULL, &tv);
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs) + 1);
 
-    // client queries: drain the socket queue before doing anything slow
-    for (int n = 0; n < 32; n++) {
-      clilen = sizeof(cli);
-      int len = recvfrom(dnsSock, rxbuf, sizeof(rxbuf), MSG_DONTWAIT, (struct sockaddr *)&cli, &clilen);
-      if (len < 0) break;
-      if (len < (int)sizeof(dns_header_t)) continue;
-      Pending *slot = NULL;
-      for (int i = 0; i < PEND_MAX; i++) if (!pend[i].used) { slot = &pend[i]; break; }
-      int txLen = processDNSquery(rxbuf, len, txbuf, sizeof(txbuf), slot);
-      if (txLen < 0) {                         // needs upstream: park it
-        slot->used = true;
-        slot->cli = cli;
-        slot->srv = 0;
-        sendUpstream(*slot);
-      } else if (txLen > 0) {
-        sendto(dnsSock, txbuf, txLen, 0, (struct sockaddr *)&cli, clilen);
+    // drain everything received so far, never waiting on the network here
+    while (rxTail != rxHead) {
+      RxItem &it = rxRing[rxTail % RX_RING];
+      if (it.fromUpstream) {
+        handleUpstreamReply(it.data, it.len, &it.addr);
+      } else if (it.len >= sizeof(dns_header_t)) {
+        Pending *slot = NULL;
+        for (int i = 0; i < PEND_MAX; i++) if (!pend[i].used) { slot = &pend[i]; break; }
+        int txLen = processDNSquery(it.data, it.len, txbuf, sizeof(txbuf), slot);
+        if (txLen < 0) {                       // needs upstream: park it
+          slot->used = true;
+          ip_addr_copy(slot->cliAddr, it.addr);
+          slot->cliPort = it.port;
+          slot->srv = 0;
+          sendUpstream(*slot);
+        } else if (txLen > 0) {
+          udpSend(dnsPcb, txbuf, txLen, &it.addr, it.port);
+        }
       }
-    }
-
-    // upstream replies
-    for (int n = 0; n < 32; n++) {
-      fl = sizeof(from);
-      int len = recvfrom(upSock, rbuf, sizeof(rbuf), MSG_DONTWAIT, (struct sockaddr *)&from, &fl);
-      if (len < 0) break;
-      handleUpstreamReply(rbuf, len, from);
+      __sync_synchronize();
+      rxTail = rxTail + 1;
     }
 
     // timeouts: try the backup server, else SERVFAIL
@@ -325,25 +359,27 @@ static void dnsTask(void *parameter) {
 static void dnsStartFail(const char* msg) {
   snprintf(startupFailure, SF_LEN, STARTUP_FAIL "%s", msg);
   LOG_WRN("%s", startupFailure);
-  if (dnsSock >= 0) { close(dnsSock); dnsSock = -1; }
-  if (upSock >= 0) { close(upSock); upSock = -1; }
 }
 
 void prepDNS() {
   pend = (Pending*)(psramFound() ? ps_calloc(PEND_MAX, sizeof(Pending)) : calloc(PEND_MAX, sizeof(Pending)));
+  rxRing = (RxItem*)(psramFound() ? ps_calloc(RX_RING, sizeof(RxItem)) : calloc(RX_RING, sizeof(RxItem)));
   dnsCache = (CacheEntry*)(psramFound() ? ps_calloc(CACHE_SIZE, sizeof(CacheEntry)) : calloc(CACHE_SIZE, sizeof(CacheEntry)));
-  if (!pend) return dnsStartFail("DNS pending table not allocated");
-  dnsSock = socket(AF_INET, SOCK_DGRAM, 0);
-  upSock = socket(AF_INET, SOCK_DGRAM, 0);
-  if (dnsSock < 0 || upSock < 0) return dnsStartFail("DNS socket not created");
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(DNS_DEFAULT_PORT);
-  addr.sin_addr.s_addr = INADDR_ANY;          // answers on STA and AP alike
-  if (bind(dnsSock, (struct sockaddr *)&addr, sizeof(addr)) < 0) return dnsStartFail("DNS port 53 bind failed");
-  if (xTaskCreatePinnedToCore(dnsTask, "dnsTask", 6144, NULL, 5, NULL, 1) != pdPASS)
+  if (!pend || !rxRing) return dnsStartFail("DNS buffers not allocated");
+  if (xTaskCreatePinnedToCore(dnsTask, "dnsTask", 6144, NULL, 5, &dnsTaskHandle, 1) != pdPASS)
     return dnsStartFail("DNS worker not started");
+  bool ok = false;
+  LOCK_TCPIP_CORE();
+  dnsPcb = udp_new_ip_type(IPADDR_TYPE_V4);
+  upPcb = udp_new_ip_type(IPADDR_TYPE_V4);
+  if (dnsPcb && upPcb && udp_bind(dnsPcb, IP4_ADDR_ANY, DNS_DEFAULT_PORT) == ERR_OK &&
+      udp_bind(upPcb, IP4_ADDR_ANY, 0) == ERR_OK) {
+    udp_recv(dnsPcb, onClientPkt, NULL);
+    udp_recv(upPcb, onUpstreamPkt, NULL);
+    ok = true;
+  }
+  UNLOCK_TCPIP_CORE();
+  if (!ok) return dnsStartFail("DNS port 53 bind failed");
   LOG_INF("AdBlocker DNS Server started on %s:%d", formatIPstr(), DNS_DEFAULT_PORT);
 }
 
