@@ -1,14 +1,19 @@
 /* Query external DNS
  *
- * Architecture (single-task design):
- *   prepDNS()  : opens ONE UDP socket bound to :53 and spawns 'dnsTask'.
- *   dnsTask()  : recvfrom -> processDNSquery -> sendto (same socket, so replies
- *                carry source port 53 like any real resolver).
- *   resolveDomainStatus(): synchronous rcode-aware query to the configured
- *                upstreams; distinguishes NXDOMAIN (RCODE 3) from SERVFAIL
- *                (timeout / RCODE 2,4,5), which lwIP's gethostbyname cannot.
- * Concurrency: only 'dnsTask' talks to dnsSock; upstream probes use short-lived
- * ephemeral sockets, so upstream replies can never be confused with queries. */
+ * Architecture (single task, fully asynchronous):
+ *   prepDNS()  : binds a raw lwIP UDP pcb on :53 (clients) and one ephemeral pcb
+ *                (upstream replies); their callbacks copy datagrams into a ring
+ *                buffer and wake 'dnsTask'.
+ *   dnsTask()  : drains the ring. Queries answerable locally (blocklist, cache,
+ *                non-A/AAAA types) are answered at once; A/AAAA cache misses are
+ *                parked in a pending table and forwarded upstream without waiting.
+ *                Upstream replies / timeouts (with primary->backup failover) complete
+ *                the pending entries. The task never blocks on the network, so a slow
+ *                upstream cannot make other clients' queries queue up or get dropped.
+ *   resolveDomainStatus(): synchronous rcode-aware query, kept only for the web
+ *                UI's domain check.
+ * Why raw pcbs: a BSD socket on lwIP queues at most CONFIG_LWIP_UDP_RECVMBOX_SIZE
+ * (6) datagrams, so a browser's burst of 50+ lookups was mostly dropped. */
 //
 // dateno1 2026
 // s60sc 2026
