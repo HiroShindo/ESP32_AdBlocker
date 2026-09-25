@@ -79,6 +79,10 @@ bool usePing = true;
 // device's own cold boot: DHCP/ARP/mDNS burst) doesn't itself trigger a restart cycle
 #define PING_FAIL_THRESHOLD 2
 static uint8_t consecutivePingFails = 0;
+// if this many network restarts in a row (each one after PING_FAIL_THRESHOLD ping timeouts)
+// still leave the gateway unreachable, reboot the whole device instead of retrying forever
+#define NET_RESTART_ATTEMPTS 3
+static uint8_t netRecoverAttempts = 0;
 TaskHandle_t statusCheckHandle = NULL;
 
 static inline void runStatusCheck();
@@ -485,6 +489,7 @@ static void pingSuccess(esp_ping_handle_t hdl, void *args) {
   }
   resetWatchDog(0, wifiTimeoutSecs * 1000 * 2);
   consecutivePingFails = 0;
+  netRecoverAttempts = 0;
   if (dataFilesChecked) resetCrashLoop();
   runStatusCheck();
 }
@@ -501,7 +506,8 @@ static void pingTimeout(esp_ping_handle_t hdl, void *args) {
         return;
       }
       consecutivePingFails = 0;
-      LOG_WRN("Failed to ping gateway, restart ethernet ...");
+      if (++netRecoverAttempts > NET_RESTART_ATTEMPTS) doRestart("gateway unreachable after repeated network restarts");
+      LOG_WRN("Failed to ping gateway, restart ethernet (attempt %u/%u) ...", netRecoverAttempts, NET_RESTART_ATTEMPTS);
       startNetwork(false);
     } else {
       if (netIsConnected()) runStatusCheck();
@@ -513,19 +519,25 @@ static void pingTimeout(esp_ping_handle_t hdl, void *args) {
   } else {
     if (strlen(ST_SSID)) {
       wl_status_t wStat = WiFi.STA.status();
-      if (wStat != WL_NO_SSID_AVAIL && wStat != WL_NO_SHIELD) {
+      // WL_NO_SSID_AVAIL (SSID not found by the last connect attempt, eg AP briefly
+      // deauthenticated us) must still be retried: autoreconnect is off, so this ping
+      // callback is the only thing that ever reconnects, and skipping it left the device
+      // offline until power cycled (AP log 2026-09-25: deauth 13:00:23, no reconnect attempt)
+      if (wStat != WL_NO_SHIELD) {
         if (usePing) {
           if (++consecutivePingFails < PING_FAIL_THRESHOLD) {
             LOG_WRN("Failed to ping gateway (%u/%u), tolerating transient miss", consecutivePingFails, PING_FAIL_THRESHOLD);
             return;
           }
           consecutivePingFails = 0;
-          LOG_WRN("Failed to ping gateway, restart wifi ...");
+          if (++netRecoverAttempts > NET_RESTART_ATTEMPTS) doRestart("gateway unreachable after repeated wifi restarts");
+          LOG_WRN("Failed to ping gateway, restart wifi (attempt %u/%u) ...", netRecoverAttempts, NET_RESTART_ATTEMPTS);
           startWifi(false);
         } else {
           if (wStat == WL_CONNECTED) runStatusCheck();
           else {
             LOG_WRN("Disconnected, restart wifi ...");
+            if (++netRecoverAttempts > NET_RESTART_ATTEMPTS) doRestart("wifi not reconnected after repeated restarts");
             startWifi(false);
           }
         }

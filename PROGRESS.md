@@ -20,6 +20,13 @@
 - SO_RCVBUF: 未採用。LWIP_UDP_RECVMBOX_SIZE=6 は件数上限で変更不可のため。raw pcb + 自前リングで回避
 - useSnap=1 に設定済みだが、v3.5 は復元後も必ずダウンロード完了まで prepDNS() を呼ばない (起動〜DNS復帰 約3分は変わらず)
 
+## WiFi 復旧の穴 (2026-09-25 13:00 に ESP32 が 12 分間オフライン、電源入れ直しで復旧)
+- Buffalo AP のログ: 13:00:23 に ESP32 (3c:0f:02:f4:fa:e0) が deauth、以後 13:12:02 の電源再投入まで接続試行なし。AP は正常、他端末は普通に再接続
+- 原因 (コード上の仮説、実機では未再現): setAutoReconnect(false) のため復旧は pingTimeout だけが頼りだが、WL_NO_SSID_AVAIL のときは何もしなかった。pingTimeout は WDT も更新するので再起動もされなかった
+- 修正: NO_SSID_AVAIL でも再接続を試行。ping失敗が続き再接続を3回試しても戻らなければ doRestart() で本体再起動 (再起動しても RAM ログは残る)
+- 11:27 / 11:34 にも ~7分おきに ESP32 が自分で切断→再接続していた (ping失敗による再接続)。なぜ ping が落ちるかは未調査
+- 監視: ~/python_prg/esp32_watch.sh → ~/python_prg/esp32_watch.log (10秒おき)
+
 ## TODO
 - [x] v3.5+小修正を実機に書き込み、16/32/64 同時テストで基準値を取る
 - [ ] 非同期フォワーダ設計案を提示 → 承認後に実装
