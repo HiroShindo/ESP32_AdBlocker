@@ -577,6 +577,10 @@ static void saveSnapshot() {
     f.seek(0);
     f.write((uint8_t*)&h, sizeof(h));              // finalize header
   }
+  size_t posBefore = f.position();
+  f.flush();
+  LOG_INF("Snap before close: ok %d, pos %lu B, size after flush %lu B, wrote %lu B",
+          (int)ok, (unsigned long)posBefore, (unsigned long)f.size(), (unsigned long)(encBytes + sizeof(SnapHdr)));
   f.close();
 
   if (!ok) {
@@ -607,6 +611,16 @@ static void saveSnapshot() {
               (unsigned long)(STORAGE.totalBytes() / 1024),
               (int)STORAGE.exists(tmpPath), (int)STORAGE.exists(SNAP_PATH));
       STORAGE.remove(tmpPath);
+      // self-test: does rename work at all for a tiny closed file?
+      const char* tA = DATA_DIR "/snaptest.tmp";
+      const char* tB = DATA_DIR "/snaptest.bin";
+      STORAGE.remove(tA); STORAGE.remove(tB);
+      File t = STORAGE.open(tA, FILE_WRITE);
+      if (t) { t.print("0123456789"); t.close(); }
+      bool tr = STORAGE.rename(tA, tB);
+      LOG_INF("Snap selftest: rename %s errno %d, dest size %lu B", tr ? "OK" : "failed", errno,
+              (unsigned long)(STORAGE.exists(tB) ? STORAGE.open(tB, FILE_READ).size() : 0));
+      STORAGE.remove(tA); STORAGE.remove(tB);
       return;
     }
   }
