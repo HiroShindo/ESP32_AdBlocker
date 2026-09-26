@@ -493,7 +493,33 @@ struct SnapHdr {
 
 /* Persist the used portion of the arena, compressed. Called after every
  * successful download; LittleFS wear-leveling makes 1 write/day trivial. */
+// temporary diagnostic: does LittleFS keep data when a file is rewound with seek(0)?
+static size_t snapTestReadBack(const char* path) {
+  File r = STORAGE.open(path, FILE_READ);
+  if (!r) return 0;
+  uint8_t b[256]; size_t n = 0, got;
+  while ((got = r.read(b, sizeof(b))) > 0) n += got;
+  r.close();
+  return n;
+}
+static void snapSelfTest() {
+  const char* tp = DATA_DIR "/snaptest.tmp";
+  uint8_t blk[100]; memset(blk, 0x5A, sizeof(blk));
+  for (int useSeek = 0; useSeek < 2; useSeek++) {
+    STORAGE.remove(tp);
+    File t = STORAGE.open(tp, FILE_WRITE);
+    if (!t) { LOG_ERR("Snap selftest open failed"); return; }
+    t.write(blk, 38);
+    for (int i = 0; i < 1000; i++) t.write(blk, 100);          // ~100KB
+    if (useSeek) { t.seek(0); t.write(blk, 38); }
+    t.close();
+    LOG_INF("Snap selftest seek=%d: read back %lu B (expect 100038)", useSeek, (unsigned long)snapTestReadBack(tp));
+  }
+  STORAGE.remove(tp);
+}
+
 static void saveSnapshot() {
+  snapSelfTest();
   if (itemsLoaded < 3 || blocklistSize < 4096) { LOG_WRN("Snap skip: tiny"); return; }
 
   // LittleFS space check (worst-case encoding: every entry unmatched)
