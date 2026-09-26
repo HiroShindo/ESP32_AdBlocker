@@ -585,17 +585,30 @@ static void saveSnapshot() {
     return;
   }
 
+  // diagnostics for rename EBUSY: short lines (log line limit is MAX_OUT 200)
+  size_t expectSz = encBytes + sizeof(SnapHdr);
+  size_t preSz = 0;
+  { File chk = STORAGE.open(tmpPath, FILE_READ); if (chk) { preSz = chk.size(); chk.close(); } }
+  bool destBefore = STORAGE.exists(SNAP_PATH);
   bool removedOld = STORAGE.remove(SNAP_PATH);     // drop previous generation
+  bool destAfter  = STORAGE.exists(SNAP_PATH);
+  LOG_INF("Snap pre-rename: tmp %lu B (expect %lu B), dest before/removed/after %d/%d/%d",
+          (unsigned long)preSz, (unsigned long)expectSz, (int)destBefore, (int)removedOld, (int)destAfter);
   if (!STORAGE.rename(tmpPath, SNAP_PATH)) {
     int err = errno;
-    File chk = STORAGE.open(tmpPath, FILE_READ);
-    size_t tmpSize = chk ? chk.size() : 0;
-    if (chk) chk.close();
-    LOG_ERR("Snap rename %s -> %s failed: errno %d (%s), tmp size %luKB (expected %luKB), old removed %d, dest exists %d, flash free %luKB",
-            tmpPath, SNAP_PATH, err, strerror(err), (unsigned long)(tmpSize / 1024), (unsigned long)((encBytes + sizeof(SnapHdr)) / 1024),
-            (int)removedOld, (int)STORAGE.exists(SNAP_PATH), (unsigned long)((STORAGE.totalBytes() - STORAGE.usedBytes()) / 1024));
-    STORAGE.remove(tmpPath);
-    return;
+    LOG_ERR("Snap rename failed: errno %d (%s)", err, strerror(err));
+    vTaskDelay(pdMS_TO_TICKS(500));                // transient or persistent?
+    bool retry = STORAGE.rename(tmpPath, SNAP_PATH);
+    int err2 = errno;
+    LOG_ERR("Snap rename retry after 500ms: %s, errno %d", retry ? "OK" : "failed", err2);
+    if (!retry) {
+      LOG_ERR("Snap free %luKB of %luKB, tmp exists %d, dest exists %d",
+              (unsigned long)((STORAGE.totalBytes() - STORAGE.usedBytes()) / 1024),
+              (unsigned long)(STORAGE.totalBytes() / 1024),
+              (int)STORAGE.exists(tmpPath), (int)STORAGE.exists(SNAP_PATH));
+      STORAGE.remove(tmpPath);
+      return;
+    }
   }
 
     LOG_INF("Snapshot saved: %u domains, %luKB -> %luKB (%lu s) "
