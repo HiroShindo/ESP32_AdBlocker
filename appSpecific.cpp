@@ -714,6 +714,17 @@ static bool loadBlockList(const char* reason) {
       if (restored) updateConfigVect("loadProg", "From Flash");   // honest UI state
     }
 
+    /* At boot a restored snapshot is served as is: a fresh download rebuilds the list in the
+     * same storage, so DNS could not start until it finished (about 3 minutes). The list is
+     * refreshed by the next scheduled load, at most a day old. */
+    if (restored && !strcmp(reason, "Initial")) {
+      LOG_INF("Serving restored snapshot, refresh at next scheduled load");
+      setLedState(LED_OK); //Change Status LED
+      loadCustom();
+      downloading = false;
+      return false;
+    }
+
     /* REPLACE semantics: a successful full download rebuilds the list from scratch
      * Rollback safety: the previous generation lives in the flash snapshot.
      * Without a snapshot (very first ever run or not enabled), fall back to merge-mode */
