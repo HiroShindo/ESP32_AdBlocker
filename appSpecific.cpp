@@ -505,15 +505,17 @@ static size_t snapTestReadBack(const char* path) {
 static void snapSelfTest() {
   const char* tp = DATA_DIR "/snaptest.tmp";
   uint8_t blk[100]; memset(blk, 0x5A, sizeof(blk));
-  for (int useSeek = 0; useSeek < 2; useSeek++) {
+  static const int kbs[] = {300, 600, 850};
+  for (int k = 0; k < 3; k++) for (int useSeek = 0; useSeek < 2; useSeek++) {
     STORAGE.remove(tp);
     File t = STORAGE.open(tp, FILE_WRITE);
     if (!t) { LOG_ERR("Snap selftest open failed"); return; }
     t.write(blk, 38);
-    for (int i = 0; i < 1000; i++) t.write(blk, 100);          // ~100KB
+    for (int i = 0; i < kbs[k] * 10; i++) t.write(blk, 100);   // kbs KB (approx)
     if (useSeek) { t.seek(0); t.write(blk, 38); }
     t.close();
-    LOG_INF("Snap selftest seek=%d: read back %lu B (expect 100038)", useSeek, (unsigned long)snapTestReadBack(tp));
+    LOG_INF("Snap selftest %dKB seek=%d: read back %lu B (expect %d)", kbs[k], useSeek,
+            (unsigned long)snapTestReadBack(tp), 38 + kbs[k] * 1000);
   }
   STORAGE.remove(tp);
 }
