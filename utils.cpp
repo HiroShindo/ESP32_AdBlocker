@@ -178,7 +178,12 @@ static void onNetEvent(arduino_event_id_t event, arduino_event_info_t info) {
     case ARDUINO_EVENT_WIFI_STA_LOST_IP: LOG_INF("Wifi Station lost IP"); break;
     case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED: break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED: LOG_INF("WiFi Station connection to %s, using hostname: %s", ST_SSID, hostName); break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: LOG_INF("WiFi Station disconnected"); break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+      // reason tells whether the AP dropped us (eg 2 AUTH_EXPIRE, 4 ASSOC_EXPIRE, 8 ASSOC_LEAVE, 201 NO_AP_FOUND) or we failed to join
+      uint8_t reason = info.wifi_sta_disconnected.reason;
+      LOG_INF("WiFi Station disconnected, reason %u (%s), rssi %d", reason, WiFi.disconnectReasonName((wifi_err_reason_t)reason), info.wifi_sta_disconnected.rssi);
+      break;
+    }
     case ARDUINO_EVENT_WIFI_AP_STACONNECTED: LOG_INF("WiFi AP client connection"); break;
     case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED: LOG_INF("WiFi AP client disconnection"); break;
     case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED: break;

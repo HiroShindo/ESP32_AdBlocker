@@ -40,3 +40,4 @@
 - 修正: wifiWatchTask を追加 (ping 監視が無く STA 未接続なら 30秒ごとに disconnect→startWifi(false)、8回失敗で doRestart)。STATUS_STACK_SIZE 4KB→8KB、statusCheckTask の残スタックを警告ログ
 - 別件: `Snap rename blsnap.bin.tmp -> blsnap.bin failed` でスナップショットが一度も保存されていない。原因未特定のため errno / tmp サイズ / 空き容量を出す診断ログを追加 (次に発生したらログを見る)
 - 未解明: 13:00 ごろ Buffalo AP (192.168.0.3) のログに ESP32 の deauth が毎日出る (9/25 13:00:23, 9/26 13:00:09)。AP 側の定時処理の可能性
+- 追加 (9/26 夜): STA 切断イベントのログに理由コード・名前・RSSI を出すようにした (`WiFi Station disconnected, reason N (NAME), rssi X`)。13:00 ごろの切断が AP 側都合 (AUTH_EXPIRE/ASSOC_LEAVE 等) か ESP32 側かを、Aterm のログ無しで ESP32 の Check Log から判定するため。Chrome からは Aterm(192.168.0.3) だけ ERR_ADDRESS_UNREACHABLE になる (curl/Safari は可、原因未特定) ので Aterm の管理画面には頼らない
