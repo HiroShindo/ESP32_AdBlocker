@@ -4,6 +4,7 @@
 // s60sc 2020, 2023, 2026
 
 #include "appGlobals.h"
+#include <errno.h>
 
 const size_t prvtkey_len = 0;
 const size_t cacert_len = 0;
@@ -584,9 +585,15 @@ static void saveSnapshot() {
     return;
   }
 
-  STORAGE.remove(SNAP_PATH);                       // drop previous generation
+  bool removedOld = STORAGE.remove(SNAP_PATH);     // drop previous generation
   if (!STORAGE.rename(tmpPath, SNAP_PATH)) {
-    LOG_ERR("Snap rename %s -> %s failed", tmpPath, SNAP_PATH);
+    int err = errno;
+    File chk = STORAGE.open(tmpPath, FILE_READ);
+    size_t tmpSize = chk ? chk.size() : 0;
+    if (chk) chk.close();
+    LOG_ERR("Snap rename %s -> %s failed: errno %d (%s), tmp size %luKB (expected %luKB), old removed %d, dest exists %d, flash free %luKB",
+            tmpPath, SNAP_PATH, err, strerror(err), (unsigned long)(tmpSize / 1024), (unsigned long)((encBytes + sizeof(SnapHdr)) / 1024),
+            (int)removedOld, (int)STORAGE.exists(SNAP_PATH), (unsigned long)((STORAGE.totalBytes() - STORAGE.usedBytes()) / 1024));
     STORAGE.remove(tmpPath);
     return;
   }

@@ -78,7 +78,9 @@
 #define MQTT_STACK_SIZE (1024 * 4)
 #define PING_STACK_SIZE (1024 * 3)
 #define SERVO_STACK_SIZE (1024)
-#define STATUS_STACK_SIZE (1024 * 4)
+// statusCheckTask runs the blocklist TLS download + snapshot save; 4KB crashed there
+// (Core 1 statusCheckTask double exception in esp_wifi_internal_tx, 2026-09-26 04:00)
+#define STATUS_STACK_SIZE (1024 * 8)
 #define SUSTAIN_STACK_SIZE (1024 * 4)
 #define TGRAM_STACK_SIZE (1024 * 6)
 #define TELEM_STACK_SIZE (1024 * 4)

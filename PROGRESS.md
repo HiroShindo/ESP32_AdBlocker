@@ -32,3 +32,11 @@
 - [ ] 非同期フォワーダ設計案を提示 → 承認後に実装
 - [ ] 再テスト (最大応答 1 秒未満が合格)
 - [ ] upstream への PR 案
+
+## 2026-09-26 起動時WiFi失敗からの復旧不能 (17時ごろ発見、電源入れ直しで復旧)
+- 事象: 04:00 の定時ブロックリスト再読込中に statusCheckTask が Double exception でクラッシュ→再起動。再起動後 `Association refused too many times` で STA 接続に失敗し、STA+AP のまま何もせず放置 (LAN上に不在、iPhone に ESP32_AdBlocker_<MAC逆順> のAPが見えた)
+- 原因1: startPing() はゲートウェイ未確定だと開始しない → 初回接続に失敗すると ping コールバック (再接続の唯一の入口) が存在せず永遠に復旧しない。9/25 のコミット d92dd80 は ping 動作中の経路しか直していなかった
+- 原因2 (推測): ブロックリストの TLS ダウンロード + スナップショット保存が 4KB スタックの statusCheckTask 上で動いている。クラッシュは esp_wifi_internal_tx/esf_buf_alloc 内 (バックトレースを ELF で解読)
+- 修正: wifiWatchTask を追加 (ping 監視が無く STA 未接続なら 30秒ごとに disconnect→startWifi(false)、8回失敗で doRestart)。STATUS_STACK_SIZE 4KB→8KB、statusCheckTask の残スタックを警告ログ
+- 別件: `Snap rename blsnap.bin.tmp -> blsnap.bin failed` でスナップショットが一度も保存されていない。原因未特定のため errno / tmp サイズ / 空き容量を出す診断ログを追加 (次に発生したらログを見る)
+- 未解明: 13:00 ごろ Buffalo AP (192.168.0.3) のログに ESP32 の deauth が毎日出る (9/25 13:00:23, 9/26 13:00:09)。AP 側の定時処理の可能性

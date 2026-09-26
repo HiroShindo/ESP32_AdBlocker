@@ -83,10 +83,16 @@ static uint8_t consecutivePingFails = 0;
 // still leave the gateway unreachable, reboot the whole device instead of retrying forever
 #define NET_RESTART_ATTEMPTS 3
 static uint8_t netRecoverAttempts = 0;
+// startPing() refuses to run until the gateway is known, so if the very first station
+// connect fails (eg AP refuses association after an abrupt reset) the ping callbacks that
+// normally drive reconnection never exist. wifiWatchTask covers exactly that gap.
+#define WIFI_WATCH_MAX_ATTEMPTS 8
+static TaskHandle_t wifiWatchHandle = NULL;
 TaskHandle_t statusCheckHandle = NULL;
 
 static inline void runStatusCheck();
 static bool startPing();
+static void wifiWatchTask(void* parameter);
 static bool waitForNTPsync(int maxRetries = 5, uint32_t perTryTimeoutMs = 2000);
 char timezone[FILE_NAME_LEN] = "GMT0";
 char ntpServer[MAX_HOST_LEN] = "pool.ntp.org";
@@ -425,7 +431,8 @@ bool startNetwork(bool firstcall) {
   }
   // connect wifi STA, or AP if router details not available
   if (!res) startWifi(firstcall);
-  res = startWebServer(); 
+  if (firstcall && wifiWatchHandle == NULL) xTaskCreate(&wifiWatchTask, "wifiWatchTask", 1024 * 4, NULL, 1, &wifiWatchHandle);
+  res = startWebServer();
 #ifdef DEV_ONLY
   devCheck();
 #endif
@@ -569,6 +576,27 @@ static bool startPing() {
   LOG_INF("Started ping monitoring - %s", usePing ? "On" : "Off");
   debugMemory("startPing");
   return true;
+}
+
+static void wifiWatchTask(void* parameter) {
+  // only acts while no ping monitor exists; once ping runs, pingTimeout() owns recovery
+  uint8_t attempts = 0;
+  while (true) {
+    vTaskDelay(pdMS_TO_TICKS(wifiTimeoutSecs * 1000));
+    if (netMode != 0 || !strlen(ST_SSID)) { attempts = 0; continue; }
+    if (WiFi.STA.status() == WL_CONNECTED) {
+      // connected after our retry but too late for startWifi() to see a gateway
+      if (attempts > 0 && pingHandle == NULL) startPing();
+      attempts = 0;
+      continue;
+    }
+    if (pingHandle != NULL) continue;
+    if (++attempts > WIFI_WATCH_MAX_ATTEMPTS) doRestart("wifi never connected and no ping monitor running");
+    LOG_WRN("WiFi not connected, no ping monitor (attempt %u/%u), restart wifi ...", attempts, WIFI_WATCH_MAX_ATTEMPTS);
+    WiFi.STA.disconnect(); // drop any half-open association state before retrying
+    vTaskDelay(pdMS_TO_TICKS(500));
+    startWifi(false);
+  }
 }
 
 void stopPing() {
@@ -897,6 +925,9 @@ static void statusCheckTask(void* parameter) {
 #if INCLUDE_MQTT
     if (mqtt_active) startMqttClient();
 #endif
+    // blocklist download (TLS) and snapshot save run on this task; log how close to overflow it got
+    uint32_t freeStack = (uint32_t)uxTaskGetStackHighWaterMark(NULL);
+    if (freeStack < MIN_STACK_FREE * 2) LOG_WRN("Task statusCheck stack space only: %lu", freeStack);
   }
 }
 
