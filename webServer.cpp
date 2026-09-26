@@ -226,6 +226,13 @@ static esp_err_t controlHandler(httpd_req_t *req) {
       doRestart(value); 
       return ESP_OK;
     }
+    if (!strcmp(variable, "zLoad")) {
+      // Reload blocklist restarts the device: reply first, otherwise the browser resends the
+      // dropped request after the reboot and the device restart-loops (seen 2026-09-26)
+      httpd_resp_sendstr(req, NULL);
+      updateStatus(variable, value);
+      return ESP_OK;
+    }
     if (!strcmp(variable, "startOTA")) snprintf(inFileName, IN_FILE_NAME_LEN - 1, "%s/%s", DATA_DIR, value); 
     else {
       // if not handled by appSpecificWebHandler(), try updateStatus()

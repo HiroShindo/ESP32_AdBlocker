@@ -41,3 +41,11 @@
 - 別件: `Snap rename blsnap.bin.tmp -> blsnap.bin failed` でスナップショットが一度も保存されていない。原因未特定のため errno / tmp サイズ / 空き容量を出す診断ログを追加 (次に発生したらログを見る)
 - 未解明: 13:00 ごろ Buffalo AP (192.168.0.3) のログに ESP32 の deauth が毎日出る (9/25 13:00:23, 9/26 13:00:09)。AP 側の定時処理の可能性
 - 追加 (9/26 夜): STA 切断イベントのログに理由コード・名前・RSSI を出すようにした (`WiFi Station disconnected, reason N (NAME), rssi X`)。13:00 ごろの切断が AP 側都合 (AUTH_EXPIRE/ASSOC_LEAVE 等) か ESP32 側かを、Aterm のログ無しで ESP32 の Check Log から判定するため。Chrome からは Aterm(192.168.0.3) だけ ERR_ADDRESS_UNREACHABLE になる (curl/Safari は可、原因未特定) ので Aterm の管理画面には頼らない
+
+## 2026-09-26 夜: 13:00クラッシュの原因整理と追加修正
+- 13:00 JST の切断は Aterm 側の定時処理ではなく ESP32 自身のクラッシュ跡だった。ESP32 の時計が UTC で動いており (configTzTime が loadConfig より前に呼ばれ GMT0 になっていた)、alarmHour=4 が 04:00 UTC = 13:00 JST に動いていた。定時更新 (Scheduled load) の直後に statusCheckTask が Double exception。9/25 13:00:23、9/26 13:00:09 の Aterm ログの deauth はその再起動
+- 検証: statusCheckTask のスタックを 8KB にした版で 19:00 JST に定時更新を走らせ (alarmHour を一時的に 10=UTC で設定)、クラッシュ・再起動・DNS断なし (監視470回)。1回のみなので確定ではない。翌 04:00 JST の更新で再確認する
+- 修正: prefs.cpp で timezone 読込時に setenv TZ + tzset (以後 log 時刻・alarmHour・週次再起動 (Tue 02:00) がすべて JST 基準)。alarmHour は暫定 19 (=04:00 JST) から本来の 4 に戻す
+- 修正: Web画面の Reload ボタンが再起動ループを起こす問題 (doRestart が応答前に呼ばれ、ブラウザが要求を再送)。webServer.cpp の controlHandler で zLoad は先に応答を返してから処理
+- 未解決: スナップショット保存の失敗 (`rename ... errno 16 (Device or resource busy), tmp size 0KB`)。DNS復旧時間は変わらないため保留
+- 補足: ESP32 の AP (ESP32_AdBlocker_<MAC逆順>) は allowAP=1 のため STA 接続中でも常時出ている (異常ではない)。Chrome から Aterm(192.168.0.3) が ERR_ADDRESS_UNREACHABLE になる件は macOS のローカルネットワーク許可ダイアログを承認したら解消

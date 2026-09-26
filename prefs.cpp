@@ -348,7 +348,13 @@ void updateStatus(const char* variable, const char* _value, bool fromUser) {
 #endif
   // Other settings
   else if (!strcmp(variable, "clockUTC")) syncToBrowser((uint32_t)intVal);      
-  else if (!strcmp(variable, "timezone")) strncpy(timezone, value, FILE_NAME_LEN-1);
+  else if (!strcmp(variable, "timezone")) {
+    strncpy(timezone, value, FILE_NAME_LEN-1);
+    // configTzTime() at startup runs before the config file is read, so it used the GMT0 default:
+    // apply the configured zone here, otherwise localtime (log stamps, alarmHour, weekly restart) stays UTC
+    setenv("TZ", timezone, 1);
+    tzset();
+  }
   else if (!strcmp(variable, "ntpServer")) strncpy(ntpServer, value, FILE_NAME_LEN-1);
   else if (!strcmp(variable, "alarmHour")) alarmHour = (uint8_t)intVal;
   else if (!strcmp(variable, "sdMinCardFreeSpace")) sdMinCardFreeSpace = intVal;
