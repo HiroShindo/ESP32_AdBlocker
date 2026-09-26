@@ -493,35 +493,7 @@ struct SnapHdr {
 
 /* Persist the used portion of the arena, compressed. Called after every
  * successful download; LittleFS wear-leveling makes 1 write/day trivial. */
-// temporary diagnostic: does LittleFS keep data when a file is rewound with seek(0)?
-static size_t snapTestReadBack(const char* path) {
-  File r = STORAGE.open(path, FILE_READ);
-  if (!r) return 0;
-  uint8_t b[256]; size_t n = 0, got;
-  while ((got = r.read(b, sizeof(b))) > 0) n += got;
-  r.close();
-  return n;
-}
-static void snapSelfTest() {
-  const char* tp = DATA_DIR "/snaptest.tmp";
-  uint8_t blk[100]; memset(blk, 0x5A, sizeof(blk));
-  static const int kbs[] = {300, 600, 850};
-  for (int k = 0; k < 3; k++) for (int useSeek = 0; useSeek < 2; useSeek++) {
-    STORAGE.remove(tp);
-    File t = STORAGE.open(tp, FILE_WRITE);
-    if (!t) { LOG_ERR("Snap selftest open failed"); return; }
-    t.write(blk, 38);
-    for (int i = 0; i < kbs[k] * 10; i++) t.write(blk, 100);   // kbs KB (approx)
-    if (useSeek) { t.seek(0); t.write(blk, 38); }
-    t.close();
-    LOG_INF("Snap selftest %dKB seek=%d: read back %lu B (expect %d)", kbs[k], useSeek,
-            (unsigned long)snapTestReadBack(tp), 38 + kbs[k] * 1000);
-  }
-  STORAGE.remove(tp);
-}
-
 static void saveSnapshot() {
-  snapSelfTest();
   if (itemsLoaded < 3 || blocklistSize < 4096) { LOG_WRN("Snap skip: tiny"); return; }
 
   // LittleFS space check (worst-case encoding: every entry unmatched)
@@ -545,112 +517,102 @@ static void saveSnapshot() {
   char tmpPath[80];
   snprintf(tmpPath, sizeof(tmpPath), "%s.tmp", SNAP_PATH);
 
-  File f = STORAGE.open(tmpPath, FILE_WRITE);
-  if (!f) { LOG_ERR("Snap OPEN FAILED: %s", tmpPath); return; }
-  f.write((uint8_t*)&h, sizeof(h));              // placeholder header, finalized below
-
-  uint32_t crc      = crc32_begin();
-  uint32_t encBytes = 0;
-  const char* prev    = "";
-  size_t      prevLen = 0;
+  /* Two passes, header first, file never rewound. Pass 0 encodes without I/O to get the
+   * exact stream length and CRC for the header; pass 1 writes header then stream.
+   * Rewinding with seek(0) + write makes LittleFS copy the whole file again, which needs
+   * as much free space again; when that is missing the close silently drops all data and
+   * leaves an empty file (seen 2026-09-27 with an 820KB snapshot on a 1.5MB partition). */
+  File f;
+  uint32_t crc = 0, encBytes = 0, encBytes1 = 0, crc1 = 0;
   bool ok = true;
   uint32_t t0 = millis();
 
-  for (uint32_t i = 0; i < itemsLoaded && ok; i++) {
-    const char* cur    = storage + ptrs[i];
-    size_t      maxCur = blocklistSize - ptrs[i];
-    size_t      cl     = strnlen(cur, maxCur);     // BOUNDED strlen
+  for (int pass = 0; pass < 2 && ok; pass++) {
+    crc = crc32_begin();
+    encBytes = nameBytes = matchBytes = 0;
+    const char* prev    = "";
+    size_t      prevLen = 0;
 
-    if (cl >= maxCur) {                            // unterminated entry!
-      LOG_ERR("Snap: entry %u UNTERMINATED at offset %u",
-              (unsigned)i, (unsigned)ptrs[i]);
-      LOG_SEND("first32: ");
-      for (size_t k = 0; k < 32 && ptrs[i] + k < blocklistSize; k++)
-        LOG_SEND("%02x ", cur[k]);
-      LOG_SEND("\n");
-      ok = false;
-      break;
+    if (pass == 1) {
+      h.rawLen = encBytes1;
+      h.crc    = crc1;
+      f = STORAGE.open(tmpPath, FILE_WRITE);
+      if (!f) { LOG_ERR("Snap OPEN FAILED: %s", tmpPath); return; }
+      ok = f.write((uint8_t*)&h, sizeof(h)) == sizeof(h);
     }
 
-    size_t ml = 0;
-    while (ml < cl && ml < prevLen && ml < 255 && cur[ml] == prev[ml]) ml++;
-    size_t sl = cl - ml;
-    if (sl > 255) { ml -= (sl - 255); sl = 255; }
+    for (uint32_t i = 0; i < itemsLoaded && ok; i++) {
+      const char* cur    = storage + ptrs[i];
+      size_t      maxCur = blocklistSize - ptrs[i];
+      size_t      cl     = strnlen(cur, maxCur);     // BOUNDED strlen
 
-    uint8_t lens[2] = { (uint8_t)ml, (uint8_t)sl };
-    crc = crc32_upd(crc, lens, 2);
-    crc = crc32_upd(crc, (const uint8_t*)cur + ml, sl);
-    ok = f.write(lens, 2) == 2 &&
-         (sl == 0 || f.write((const uint8_t*)cur + ml, sl) == sl);
-    encBytes   += 2 + sl;
-    nameBytes  += cl;
-    matchBytes += ml;
-    prev = cur; prevLen = cl;
+      if (cl >= maxCur) {                            // unterminated entry!
+        LOG_ERR("Snap: entry %u UNTERMINATED at offset %u",
+                (unsigned)i, (unsigned)ptrs[i]);
+        LOG_SEND("first32: ");
+        for (size_t k = 0; k < 32 && ptrs[i] + k < blocklistSize; k++)
+          LOG_SEND("%02x ", cur[k]);
+        LOG_SEND("\n");
+        ok = false;
+        break;
+      }
+
+      size_t ml = 0;
+      while (ml < cl && ml < prevLen && ml < 255 && cur[ml] == prev[ml]) ml++;
+      size_t sl = cl - ml;
+      if (sl > 255) { ml -= (sl - 255); sl = 255; }
+
+      uint8_t lens[2] = { (uint8_t)ml, (uint8_t)sl };
+      crc = crc32_upd(crc, lens, 2);
+      crc = crc32_upd(crc, (const uint8_t*)cur + ml, sl);
+      if (pass == 1)
+        ok = f.write(lens, 2) == 2 &&
+             (sl == 0 || f.write((const uint8_t*)cur + ml, sl) == sl);
+      encBytes   += 2 + sl;
+      nameBytes  += cl;
+      matchBytes += ml;
+      prev = cur; prevLen = cl;
+    }
+
+    if (pass == 0) {
+      // corruption tripwire: encoded stream can never exceed names + 2B/entry
+      if (ok && encBytes > nameBytes + itemsLoaded * 2 + 16) {
+        LOG_ERR("Snap ABORTED: encoder wrote %luKB for %luKB of names "
+                "(entries=%u matched=%luKB) - memory corruption suspected",
+                (unsigned long)(encBytes / 1024), (unsigned long)(nameBytes / 1024),
+                (unsigned)itemsLoaded, (unsigned long)(matchBytes / 1024));
+        return;                                      // flash untouched
+      }
+      encBytes1 = encBytes;
+      crc1 = crc32_end(crc);
+    }
   }
 
-  // corruption tripwire: encoded stream can never exceed names + 2B/entry
-  if (encBytes > nameBytes + itemsLoaded * 2 + 16) {
-    f.close();
-    STORAGE.remove(tmpPath);
-    LOG_ERR("Snap ABORTED: encoder wrote %luKB for %luKB of names "
-            "(entries=%u matched=%luKB) - memory corruption suspected",
-            (unsigned long)(encBytes / 1024), (unsigned long)(nameBytes / 1024),
-            (unsigned)itemsLoaded, (unsigned long)(matchBytes / 1024));
-    return;                                        // flash untouched
-  }
-
-  if (ok) {
-    h.rawLen = encBytes;
-    h.crc    = crc32_end(crc);
-    f.seek(0);
-    f.write((uint8_t*)&h, sizeof(h));              // finalize header
-  }
-  size_t posBefore = f.position();
-  f.flush();
-  LOG_INF("Snap before close: ok %d, pos %lu B, size after flush %lu B, wrote %lu B",
-          (int)ok, (unsigned long)posBefore, (unsigned long)f.size(), (unsigned long)(encBytes + sizeof(SnapHdr)));
-  f.close();
-
+  if (f) f.close();
   if (!ok) {
     STORAGE.remove(tmpPath);
     LOG_WRN("Snapshot encode failed - removed");
     return;
   }
 
-  // diagnostics for rename EBUSY: short lines (log line limit is MAX_OUT 200)
+  // a failed flush on close leaves a short or empty file with no error, so check the size
   size_t expectSz = encBytes + sizeof(SnapHdr);
-  size_t preSz = 0;
-  { File chk = STORAGE.open(tmpPath, FILE_READ); if (chk) { preSz = chk.size(); chk.close(); } }
-  bool destBefore = STORAGE.exists(SNAP_PATH);
-  bool removedOld = STORAGE.remove(SNAP_PATH);     // drop previous generation
-  bool destAfter  = STORAGE.exists(SNAP_PATH);
-  LOG_INF("Snap pre-rename: tmp %lu B (expect %lu B), dest before/removed/after %d/%d/%d",
-          (unsigned long)preSz, (unsigned long)expectSz, (int)destBefore, (int)removedOld, (int)destAfter);
+  size_t tmpSz = 0;
+  { File chk = STORAGE.open(tmpPath, FILE_READ); if (chk) { tmpSz = chk.size(); chk.close(); } }
+  if (tmpSz != expectSz) {
+    LOG_ERR("Snap write short: tmp %lu B, expected %lu B, flash free %luKB",
+            (unsigned long)tmpSz, (unsigned long)expectSz,
+            (unsigned long)((STORAGE.totalBytes() - STORAGE.usedBytes()) / 1024));
+    STORAGE.remove(tmpPath);
+    return;
+  }
+
+  STORAGE.remove(SNAP_PATH);                       // drop previous generation
   if (!STORAGE.rename(tmpPath, SNAP_PATH)) {
     int err = errno;
     LOG_ERR("Snap rename failed: errno %d (%s)", err, strerror(err));
-    vTaskDelay(pdMS_TO_TICKS(500));                // transient or persistent?
-    bool retry = STORAGE.rename(tmpPath, SNAP_PATH);
-    int err2 = errno;
-    LOG_ERR("Snap rename retry after 500ms: %s, errno %d", retry ? "OK" : "failed", err2);
-    if (!retry) {
-      LOG_ERR("Snap free %luKB of %luKB, tmp exists %d, dest exists %d",
-              (unsigned long)((STORAGE.totalBytes() - STORAGE.usedBytes()) / 1024),
-              (unsigned long)(STORAGE.totalBytes() / 1024),
-              (int)STORAGE.exists(tmpPath), (int)STORAGE.exists(SNAP_PATH));
-      STORAGE.remove(tmpPath);
-      // self-test: does rename work at all for a tiny closed file?
-      const char* tA = DATA_DIR "/snaptest.tmp";
-      const char* tB = DATA_DIR "/snaptest.bin";
-      STORAGE.remove(tA); STORAGE.remove(tB);
-      File t = STORAGE.open(tA, FILE_WRITE);
-      if (t) { t.print("0123456789"); t.close(); }
-      bool tr = STORAGE.rename(tA, tB);
-      LOG_INF("Snap selftest: rename %s errno %d, dest size %lu B", tr ? "OK" : "failed", errno,
-              (unsigned long)(STORAGE.exists(tB) ? STORAGE.open(tB, FILE_READ).size() : 0));
-      STORAGE.remove(tA); STORAGE.remove(tB);
-      return;
-    }
+    STORAGE.remove(tmpPath);
+    return;
   }
 
     LOG_INF("Snapshot saved: %u domains, %luKB -> %luKB (%lu s) "
