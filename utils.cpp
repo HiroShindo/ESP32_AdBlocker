@@ -81,7 +81,8 @@ bool usePing = true;
 static uint8_t consecutivePingFails = 0;
 // if this many network restarts in a row (each one after PING_FAIL_THRESHOLD ping timeouts)
 // still leave the gateway unreachable, reboot the whole device instead of retrying forever
-#define NET_RESTART_ATTEMPTS 3
+// (6 attempts ~ 5 min: AP outage 2026-09-26 19:57 lasted ~3 min and 3 attempts only just covered it)
+#define NET_RESTART_ATTEMPTS 6
 static uint8_t netRecoverAttempts = 0;
 // startPing() refuses to run until the gateway is known, so if the very first station
 // connect fails (eg AP refuses association after an abrupt reset) the ping callbacks that

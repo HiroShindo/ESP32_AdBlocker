@@ -49,3 +49,5 @@
 - 修正: Web画面の Reload ボタンが再起動ループを起こす問題 (doRestart が応答前に呼ばれ、ブラウザが要求を再送)。webServer.cpp の controlHandler で zLoad は先に応答を返してから処理
 - 未解決: スナップショット保存の失敗 (`rename ... errno 16 (Device or resource busy), tmp size 0KB`)。DNS復旧時間は変わらないため保留
 - 補足: ESP32 の AP (ESP32_AdBlocker_<MAC逆順>) は allowAP=1 のため STA 接続中でも常時出ている (異常ではない)。Chrome から Aterm(192.168.0.3) が ERR_ADDRESS_UNREACHABLE になる件は macOS のローカルネットワーク許可ダイアログを承認したら解消
+- 9/26 19:57〜20:00 Aterm (Buffalo WSR-5400XE6, 192.168.0.3) が原因不明で再起動し Wi-Fi が約3分停止。ESP32 は再起動せず自力復旧したが、再接続 3/3 回目でぎりぎりだった (Aterm ログ: BOOT の記録、再起動でログ消去。電源周りに問題なし。ファームは最新 Ver.1.15 で更新なし。Buffalo の自動更新は初期設定で毎日 04:00〜04:59 に 2〜3 分停止させるので、翌 04:00 JST の検証と重なる可能性あり)
+- 対応: NET_RESTART_ATTEMPTS を 3→6 (約5分まで待ってから ESP32 を再起動)
