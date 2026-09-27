@@ -849,10 +849,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "maxDomLen")) maxDomLen = intVal;
   else if (!strcmp(variable, "showBL")) showBlockList(intVal); // not on web page
   else if (!strcmp(variable, "useSnap")) useSnap = (bool)intVal;
-  // TEMPORARY test hook: force the "Scheduled" reload path on demand, to verify the
-  // downloadBlockList() res-reset fix without waiting for the real hourly alarm. Remove
-  // once 2026-09-28 verification is done.
-  else if (fromUser && !strcmp(variable, "dbgSched")) loadBlockList("Scheduled");
   else if (fromUser && !strcmp(variable, "xStop")) {
     stopLoad = true;
     LOG_ALT("Blocklist load being stopped");
