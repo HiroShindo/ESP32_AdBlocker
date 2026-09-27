@@ -852,10 +852,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (fromUser && !strcmp(variable, "vLoad")) checkDomain(value, false, true);
   // check if user supplied domain name in blocklist
   else if (fromUser && !strcmp(variable, "wLoad")) checkDomain(value, false, false);
-  // TEMPORARY test hook: force the "Scheduled" reload path on demand, to verify the
-  // snapshot save space-check fix without waiting for the real hourly alarm. Remove
-  // once 2026-09-28 verification is done.
-  else if (fromUser && !strcmp(variable, "dbgSched")) loadBlockList("Scheduled");
     else if (fromUser && !strcmp(variable, "zLoad")) {
     stopLoad = false;
     if (strlen(value)) {
