@@ -835,7 +835,11 @@ static time_t setAlarm(uint8_t alarmHour) {
     timeinfo->tm_min = 0;
     timeinfo->tm_sec = 0;
     nextDay = 1;
-  } while (mktime(timeinfo) < currEpoch);
+    // '<=' not '<': if checkAlarm() runs at the exact alarm second, a same-day candidate
+    // computed as == currEpoch must still roll to tomorrow, otherwise rolloverEpoch is set
+    // to a time that has already passed and checkAlarm() fires a second time as soon as the
+    // in-progress scheduled load finishes (seen 2026-09-28: two "Scheduled load" back to back)
+  } while (mktime(timeinfo) <= currEpoch);
   char inBuff[30];
   strftime(inBuff, sizeof(inBuff), "%d/%m/%Y %H:%M:%S", timeinfo);
   LOG_INF("Alarm scheduled at %s", inBuff);

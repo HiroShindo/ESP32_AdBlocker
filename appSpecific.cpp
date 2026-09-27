@@ -496,15 +496,6 @@ struct SnapHdr {
 static void saveSnapshot() {
   if (itemsLoaded < 3 || blocklistSize < 4096) { LOG_WRN("Snap skip: tiny"); return; }
 
-  // LittleFS space check (worst-case encoding: every entry unmatched)
-  uint32_t worstCase = blocklistSize + itemsLoaded * 2 + sizeof(SnapHdr) + 4096;
-  uint32_t freeFs = STORAGE.totalBytes() - STORAGE.usedBytes();
-  if (freeFs < worstCase) {
-    LOG_WRN("Snap skipped: flash free %uKB < needed ~%uKB",
-            (unsigned)(freeFs / 1024), (unsigned)(worstCase / 1024));
-    return;
-  }
-
   // corruption tripwire accumulators
   uint32_t nameBytes  = 0;
   uint32_t matchBytes = 0;
@@ -585,6 +576,24 @@ static void saveSnapshot() {
       }
       encBytes1 = encBytes;
       crc1 = crc32_end(crc);
+
+      /* Drop the previous generation now, before writing the new one: the 1.5MB partition
+       * has no room to hold both a full old and new snapshot at once (a same-size list
+       * already leaves under 620KB free), so keeping the old one until the new one is
+       * verified - as this used to - meant the space check failed every single day once
+       * a snapshot existed (seen 2026-09-28). Losing the old snapshot on a crash mid-write
+       * is an acceptable trade: loadSnapshot() already tolerates a missing/corrupt file and
+       * falls back to a full download. */
+      STORAGE.remove(SNAP_PATH);
+
+      // space check uses the real encoded size from this dry-run pass, not a worst-case guess
+      uint32_t needed = encBytes1 + sizeof(SnapHdr) + 4096;
+      uint32_t freeFs = STORAGE.totalBytes() - STORAGE.usedBytes();
+      if (freeFs < needed) {
+        LOG_WRN("Snap skipped: flash free %uKB < needed ~%uKB",
+                (unsigned)(freeFs / 1024), (unsigned)(needed / 1024));
+        return;
+      }
     }
   }
 
@@ -607,8 +616,7 @@ static void saveSnapshot() {
     return;
   }
 
-  STORAGE.remove(SNAP_PATH);                       // drop previous generation
-  if (!STORAGE.rename(tmpPath, SNAP_PATH)) {
+  if (!STORAGE.rename(tmpPath, SNAP_PATH)) {        // previous generation already dropped above
     int err = errno;
     LOG_ERR("Snap rename failed: errno %d (%s)", err, strerror(err));
     STORAGE.remove(tmpPath);
