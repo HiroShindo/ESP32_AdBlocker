@@ -334,6 +334,13 @@ static bool downloadBlockList() {
     size_t downloadSize = 0;
     char progStr[10];
 
+    /* From here 'res' tracks whether the blocklist itself was actually downloaded, not
+     * whether the TLS connect above succeeded: without this reset, a failure below (bad
+     * URL, bad HTTP status, connection drop) left 'res' true from the TLS connect, so the
+     * caller treated an empty, already-wiped blocklist as a successful load - skipping the
+     * snapshot fallback and reporting success while ad blocking was effectively disabled
+     * (seen 2026-09-28, triggered by a malformed fileURL). */
+    res = false;
     if (https.begin(wclient, fileURL)) {
       downloading = true;
       LOG_INF("Downloading %s\n", fileURL);
