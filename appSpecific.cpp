@@ -921,6 +921,11 @@ void appSpecificWsHandler(const char* wsMsg) {
   }
 }
 
+void getBlockCounts(uint32_t* block, uint32_t* allow) {
+  *block = blockCnt;
+  *allow = allowCnt;
+}
+
 char* buildAppJsonString(bool filter) {
   // build app specific part of json string
   char* p = jsonBuff + 1;

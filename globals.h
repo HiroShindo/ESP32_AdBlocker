@@ -114,6 +114,7 @@ void appSpecificWsHandler(const char* wsMsg);
 void appSpecificTelegramTask(void* p);
 char* buildAppJsonString(bool filter);
 bool updateAppStatus(const char* variable, const char* value, bool fromUser = true);
+void getBlockCounts(uint32_t* block, uint32_t* allow);
 
 // global general utility functions in utils.cpp / utilsFS.cpp / peripherals.cpp etc
 void buildJsonString(uint8_t filter);

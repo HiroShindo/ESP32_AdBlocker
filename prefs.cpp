@@ -426,8 +426,13 @@ void buildJsonString(uint8_t filter) {
     p += sprintf(p, "\"wifi_rssi\":\"%i dBm\",", netRSSI() );  
     if (!filter) {
       // populate first part of json string from config vect
-      for (const auto& row : configs) 
-        p += sprintf(p, "\"%s\":\"%s\",", row[0].c_str(), row[1].c_str());
+      uint32_t liveBlockCnt, liveAllowCnt;
+      getBlockCounts(&liveBlockCnt, &liveAllowCnt);
+      for (const auto& row : configs) {
+        if (row[0] == "blockCnt") p += sprintf(p, "\"blockCnt\":\"%lu\",", liveBlockCnt);
+        else if (row[0] == "allowCnt") p += sprintf(p, "\"allowCnt\":\"%lu\",", liveAllowCnt);
+        else p += sprintf(p, "\"%s\":\"%s\",", row[0].c_str(), row[1].c_str());
+      }
       p += sprintf(p, "\"logType\":\"%d\",", logType);
       // passwords stored in prefs on NVS 
       p += sprintf(p, "\"ST_Pass\":\"%.*s\",", strlen(ST_Pass), FILLSTAR);
