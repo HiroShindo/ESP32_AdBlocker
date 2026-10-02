@@ -488,6 +488,20 @@ void resetWatchDog(int wdIndex, uint32_t wdTimeout) {
   }
 }
 
+static void dropFallbackAP() {
+  // with allowAP off the AP is only a fallback for when the station SSID cannot be found, but once
+  // started it stayed up until the next reboot (utils.cpp startWifi only ever starts it). An open AP left
+  // running lets phones that saved it auto-join and lose internet (router spoof log 2026-10-02 04:03).
+  // Stop it once the gateway answers a ping, ie station is really back; startWifi(false) restarts it
+  // if the router disappears again.
+  if (!allowAP && APstarted && netMode == 0 && strlen(ST_SSID) && WiFi.STA.status() == WL_CONNECTED) {
+    WiFi.AP.end();
+    APstarted = false; // AP stop event may not match AP_SSID once the AP is gone
+    LOG_INF("Wifi AP stopped, station connected");
+    getWifiMode();
+  }
+}
+
 static void pingSuccess(esp_ping_handle_t hdl, void *args) {
   //uint32_t elapsed_time;
   //esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &elapsed_time, sizeof(elapsed_time));
@@ -503,6 +517,7 @@ static void pingSuccess(esp_ping_handle_t hdl, void *args) {
   resetWatchDog(0, wifiTimeoutSecs * 1000 * 2);
   consecutivePingFails = 0;
   netRecoverAttempts = 0;
+  dropFallbackAP();
   if (dataFilesChecked) resetCrashLoop();
   runStatusCheck();
 }
